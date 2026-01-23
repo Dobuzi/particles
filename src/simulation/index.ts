@@ -4,3 +4,4 @@
 export * from './VerletParticle';
 export * from './Constraints';
 export * from './ParticleSimulation';
+export * from './ClaySimulation';

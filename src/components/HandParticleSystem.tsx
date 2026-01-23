@@ -11,7 +11,7 @@ import { flowVector } from '../utils/flowField';
 import { vec3Lerp, xorshift32 } from '../utils/math';
 import { hslToRgb } from '../utils/color';
 import { HAND_SKELETON } from '../hand/HandSkeleton';
-import { createStableDistribution } from '../hand/ParticleDistribution';
+import { createStableDistribution, createLinkDistribution } from '../hand/ParticleDistribution';
 import {
   createSimulation,
   updateTargets,
@@ -43,6 +43,7 @@ type HandParticleSystemProps = {
   handStreamBalance: number; // 0 = all hand-form, 1 = all streams
   streamIntensity: number;   // 0-1 stream visibility
   showStreams: boolean;
+  showLinks: boolean;         // Joint-link ribbon particles
   flowStrength: number;
   noiseStrength: number;
   colorIntensity: number;    // 0-1 color vibrancy
@@ -85,28 +86,20 @@ const computeParticleTarget = (
   };
 };
 
-// Color mapping by region
+// Color mapping by region - unified pearl grey, brightness-only variation
+// Both hands use same neutral palette for structural clarity
 const getRegionColor = (region: string, isLeftHand: boolean): [number, number, number] => {
-  if (isLeftHand) {
-    // Cyan spectrum for left hand
-    switch (region) {
-      case 'palm': return [0.3, 0.85, 1.0];
-      case 'thumb': return [0.35, 0.9, 0.95];
-      case 'proximal': return [0.4, 0.88, 0.98];
-      case 'intermediate': return [0.45, 0.85, 0.95];
-      case 'distal': return [0.5, 0.8, 0.9];
-      default: return [0.4, 0.9, 1.0];
-    }
-  } else {
-    // Warm orange spectrum for right hand
-    switch (region) {
-      case 'palm': return [1.0, 0.65, 0.4];
-      case 'thumb': return [1.0, 0.7, 0.45];
-      case 'proximal': return [0.98, 0.68, 0.48];
-      case 'intermediate': return [0.95, 0.72, 0.52];
-      case 'distal': return [0.9, 0.75, 0.55];
-      default: return [1.0, 0.7, 0.5];
-    }
+  // Subtle warm tint for left hand, cool tint for right (very subtle differentiation)
+  const warmShift = isLeftHand ? 0.02 : -0.01;
+
+  // Pearl grey base with region-based brightness
+  switch (region) {
+    case 'palm': return [0.72 + warmShift, 0.74, 0.78];        // Slightly darker interior
+    case 'thumb': return [0.78 + warmShift, 0.80, 0.84];
+    case 'proximal': return [0.76 + warmShift, 0.78, 0.82];    // Knuckles
+    case 'intermediate': return [0.80 + warmShift, 0.82, 0.86];
+    case 'distal': return [0.88 + warmShift, 0.90, 0.92];      // Brightest at tips
+    default: return [0.78 + warmShift, 0.80, 0.84];
   }
 };
 
@@ -116,6 +109,7 @@ export function HandParticleSystem({
   handStreamBalance,
   streamIntensity,
   showStreams,
+  showLinks,
   flowStrength,
   noiseStrength,
   colorIntensity,
@@ -143,6 +137,8 @@ export function HandParticleSystem({
     leftAssignments,
     rightAssignments,
     streamAssignments,
+    leftLinkAssignments,
+    rightLinkAssignments,
   } = useMemo(() => {
     // Use stable seeded distribution for each hand
     const left = createStableDistribution(particlesPerHand, 42);
@@ -159,12 +155,18 @@ export function HandParticleSystem({
       }
     }
 
+    // Link particles (joint-to-joint ribbons)
+    const leftLinks = showLinks ? createLinkDistribution(3, 201) : [];
+    const rightLinks = showLinks ? createLinkDistribution(3, 307) : [];
+
     return {
       leftAssignments: left,
       rightAssignments: right,
       streamAssignments: streams,
+      leftLinkAssignments: leftLinks,
+      rightLinkAssignments: rightLinks,
     };
-  }, [particlesPerHand, particlesPerStream, showStreams]);
+  }, [particlesPerHand, particlesPerStream, showStreams, showLinks]);
 
   // Initialize particle buffers
   const {
@@ -173,9 +175,9 @@ export function HandParticleSystem({
     baseScales,
     renderScales,
     noiseSeeds,
-    particleData, // Encodes: type (0=hand, 1=stream) + region weight for contrast
+    particleData, // Encodes: type (0=hand, 1=stream, 2=link) + region weight for contrast
   } = useMemo(() => {
-    const total = particlesPerHand * 2 + streamAssignments.length;
+    const total = particlesPerHand * 2 + streamAssignments.length + leftLinkAssignments.length + rightLinkAssignments.length;
     const positionsArray = new Float32Array(total * 3);
     const colorsArray = new Float32Array(total * 3);
     const baseScalesArray = new Float32Array(total);
@@ -257,7 +259,11 @@ export function HandParticleSystem({
       positionsArray[i3 + 1] = 0;
       positionsArray[i3 + 2] = 0;
 
-      const [r, g, b] = hslToRgb(0.15 + stream.streamIdx * 0.12, 0.7, 0.6);
+      // Warm cream accent for all streams (unified, not rainbow)
+      const streamBrightness = 0.85 + (stream.streamIdx / 5) * 0.1; // Slight variation
+      const r = 0.95 * streamBrightness;
+      const g = 0.88 * streamBrightness;
+      const b = 0.75 * streamBrightness;
       colorsArray[i3] = r;
       colorsArray[i3 + 1] = g;
       colorsArray[i3 + 2] = b;
@@ -272,6 +278,53 @@ export function HandParticleSystem({
       idx++;
     }
 
+    // Left hand link particles (joint ribbons)
+    for (const link of leftLinkAssignments) {
+      const i3 = idx * 3;
+      const i2 = idx * 2;
+      positionsArray[i3] = 0;
+      positionsArray[i3 + 1] = 0;
+      positionsArray[i3 + 2] = 0;
+
+      // Same color as hand but slightly desaturated
+      const [r, g, b] = getRegionColor(link.region, true);
+      colorsArray[i3] = r * 0.85;
+      colorsArray[i3 + 1] = g * 0.85;
+      colorsArray[i3 + 2] = b * 0.85;
+
+      // Link particles are smaller
+      baseScalesArray[idx] = 0.35 + Math.random() * 0.15;
+      renderScalesArray[idx] = baseScalesArray[idx];
+      seedsArray[idx] = (Math.random() * 0xffffffff) >>> 0;
+
+      // Particle data: [type=2 (link), regionWeight]
+      particleDataArray[i2] = 2.0;  // Link particle
+      particleDataArray[i2 + 1] = getRegionWeight(link.region) * 0.9;
+      idx++;
+    }
+
+    // Right hand link particles
+    for (const link of rightLinkAssignments) {
+      const i3 = idx * 3;
+      const i2 = idx * 2;
+      positionsArray[i3] = 0;
+      positionsArray[i3 + 1] = 0;
+      positionsArray[i3 + 2] = 0;
+
+      const [r, g, b] = getRegionColor(link.region, false);
+      colorsArray[i3] = r * 0.85;
+      colorsArray[i3 + 1] = g * 0.85;
+      colorsArray[i3 + 2] = b * 0.85;
+
+      baseScalesArray[idx] = 0.35 + Math.random() * 0.15;
+      renderScalesArray[idx] = baseScalesArray[idx];
+      seedsArray[idx] = (Math.random() * 0xffffffff) >>> 0;
+
+      particleDataArray[i2] = 2.0;  // Link particle
+      particleDataArray[i2 + 1] = getRegionWeight(link.region) * 0.9;
+      idx++;
+    }
+
     return {
       positions: positionsArray,
       colors: colorsArray,
@@ -280,10 +333,10 @@ export function HandParticleSystem({
       noiseSeeds: seedsArray,
       particleData: particleDataArray,
     };
-  }, [leftAssignments, rightAssignments, streamAssignments]);
+  }, [leftAssignments, rightAssignments, streamAssignments, leftLinkAssignments, rightLinkAssignments]);
 
   // Actual particle count
-  const actualParticleCount = particlesPerHand * 2 + streamAssignments.length;
+  const actualParticleCount = particlesPerHand * 2 + streamAssignments.length + leftLinkAssignments.length + rightLinkAssignments.length;
 
   // Initialize or resize simulation
   useEffect(() => {
@@ -323,7 +376,6 @@ export function HandParticleSystem({
   // Per-stream state for soft transitions and distance-based intensity
   const streamPresenceRef = useRef<Float32Array>(new Float32Array(5)); // One per finger
   const streamDistancesRef = useRef<Float32Array>(new Float32Array(5));
-  const prevFingertipsRef = useRef<{ left: Vec3[]; right: Vec3[] } | null>(null);
 
   useFrame(({ clock }, delta) => {
     if (paused) return;
@@ -523,6 +575,40 @@ export function HandParticleSystem({
       idx++;
     }
 
+    // Left hand link particle targets (joint ribbons)
+    for (const link of leftLinkAssignments) {
+      if (leftLandmarks && leftPresence > 0.01) {
+        const bone = HAND_SKELETON.bones[link.boneId];
+        const start = leftLandmarks[bone.startIdx];
+        const end = leftLandmarks[bone.endIdx];
+        targets.push(vec3Lerp(start, end, link.t));
+      } else {
+        targets.push({
+          x: positions[idx * 3] * 0.97,
+          y: positions[idx * 3 + 1] * 0.97,
+          z: positions[idx * 3 + 2] * 0.97,
+        });
+      }
+      idx++;
+    }
+
+    // Right hand link particle targets
+    for (const link of rightLinkAssignments) {
+      if (rightLandmarks && rightPresence > 0.01) {
+        const bone = HAND_SKELETON.bones[link.boneId];
+        const start = rightLandmarks[bone.startIdx];
+        const end = rightLandmarks[bone.endIdx];
+        targets.push(vec3Lerp(start, end, link.t));
+      } else {
+        targets.push({
+          x: positions[idx * 3] * 0.97,
+          y: positions[idx * 3 + 1] * 0.97,
+          z: positions[idx * 3 + 2] * 0.97,
+        });
+      }
+      idx++;
+    }
+
     // Update simulation targets and step physics
     updateTargets(sim, targets);
     step(sim, Math.min(delta, 0.05)); // Cap delta to prevent instability
@@ -532,7 +618,7 @@ export function HandParticleSystem({
     idx = 0;
 
     // Update left hand particles
-    for (const assignment of leftAssignments) {
+    for (let _i = 0; _i < leftAssignments.length; _i++) {
       const i3 = idx * 3;
       const presence = leftPresence;
 
@@ -566,7 +652,7 @@ export function HandParticleSystem({
     }
 
     // Update right hand particles
-    for (const assignment of rightAssignments) {
+    for (let _i = 0; _i < rightAssignments.length; _i++) {
       const i3 = idx * 3;
       const presence = rightPresence;
 
@@ -644,6 +730,66 @@ export function HandParticleSystem({
       idx++;
     }
 
+    // Update left hand link particles
+    for (let _i = 0; _i < leftLinkAssignments.length; _i++) {
+      const i3 = idx * 3;
+      const presence = leftPresence;
+
+      let px = simPositions[i3];
+      let py = simPositions[i3 + 1];
+      let pz = simPositions[i3 + 2];
+
+      // Minimal flow for links (they're structural)
+      const flow = flowVector(px, py, pz, time);
+      px += flow.x * flowScale * 0.15;
+      py += flow.y * flowScale * 0.15;
+      pz += flow.z * flowScale * 0.15;
+
+      // Minimal noise
+      let seed = noiseSeeds[idx];
+      seed = xorshift32(seed);
+      px += ((seed & 0xffff) / 0xffff - 0.5) * noiseScale * 0.3;
+      seed = xorshift32(seed);
+      py += ((seed & 0xffff) / 0xffff - 0.5) * noiseScale * 0.3;
+      noiseSeeds[idx] = seed;
+
+      positions[i3] = px;
+      positions[i3 + 1] = py;
+      positions[i3 + 2] = pz;
+
+      renderScales[idx] = baseScales[idx] * presence;
+      idx++;
+    }
+
+    // Update right hand link particles
+    for (let _i = 0; _i < rightLinkAssignments.length; _i++) {
+      const i3 = idx * 3;
+      const presence = rightPresence;
+
+      let px = simPositions[i3];
+      let py = simPositions[i3 + 1];
+      let pz = simPositions[i3 + 2];
+
+      const flow = flowVector(px, py, pz, time);
+      px += flow.x * flowScale * 0.15;
+      py += flow.y * flowScale * 0.15;
+      pz += flow.z * flowScale * 0.15;
+
+      let seed = noiseSeeds[idx];
+      seed = xorshift32(seed);
+      px += ((seed & 0xffff) / 0xffff - 0.5) * noiseScale * 0.3;
+      seed = xorshift32(seed);
+      py += ((seed & 0xffff) / 0xffff - 0.5) * noiseScale * 0.3;
+      noiseSeeds[idx] = seed;
+
+      positions[i3] = px;
+      positions[i3 + 1] = py;
+      positions[i3 + 2] = pz;
+
+      renderScales[idx] = baseScales[idx] * presence;
+      idx++;
+    }
+
     geometry.attributes.position.needsUpdate = true;
     geometry.attributes.aScale.needsUpdate = true;
     geometry.attributes.aColor.needsUpdate = true;
@@ -676,7 +822,7 @@ export function HandParticleSystem({
         varying float vScale;
         varying vec3 vColor;
         varying float vDepth;
-        varying float vParticleType;    // 0 = hand, 1 = stream
+        varying float vParticleType;    // 0 = hand, 1 = stream, 2 = link
         varying float vRegionWeight;    // Luminance contrast weight
 
         void main() {
@@ -738,8 +884,10 @@ export function HandParticleSystem({
           // 1. Base glow - tighter than before
           float baseGlow = smoothstep(0.5, 0.15, d);  // Narrower glow radius
 
-          // 2. Type-based glow: hand particles get LESS glow, streams get more
-          float typeGlowMult = mix(0.25, 0.7, vParticleType);  // Hand=0.25, Stream=0.7
+          // 2. Type-based glow: hand=0.25, stream=0.7, link=0.15 (most subtle)
+          float typeGlowMult = vParticleType < 0.5 ? 0.25
+                             : vParticleType < 1.5 ? 0.7
+                             : 0.15;  // Links are subtle connectors
 
           // 3. Depth-aware attenuation: interior (far) particles get less glow
           float depthGlowMult = mix(0.3, 1.0, vDepth);  // Far=0.3, Near=1.0
@@ -780,8 +928,11 @@ export function HandParticleSystem({
           float baseAlpha = 0.4 + vScale * 0.35;      // Reduced from 0.5 + 0.5
           float alpha = core * baseAlpha * depthAlpha;
 
-          // Streams get slightly higher alpha (they're sparse)
-          alpha = mix(alpha, alpha * 1.2, vParticleType);
+          // Type-based alpha: hand=1.0, stream=1.2, link=0.7 (subtle)
+          float typeAlphaMult = vParticleType < 0.5 ? 1.0
+                              : vParticleType < 1.5 ? 1.2
+                              : 0.7;  // Links are more transparent
+          alpha *= typeAlphaMult;
 
           gl_FragColor = vec4(color, alpha);
         }
@@ -791,7 +942,7 @@ export function HandParticleSystem({
   );
 
   return (
-    <points key={`hand-system-${actualParticleCount}-${showStreams}`}>
+    <points key={`hand-system-${actualParticleCount}-${showStreams}-${showLinks}`}>
       <bufferGeometry ref={geometryRef}>
         <bufferAttribute
           attach="attributes-position"

@@ -2,14 +2,16 @@
 
 :root {
   color-scheme: light dark;
-  --bg-dark: #0a0b12;
-  --bg-light: #f6f4ef;
-  --panel-dark: rgba(16, 18, 29, 0.8);
-  --panel-light: rgba(255, 255, 255, 0.85);
-  --accent: #78f0ff;
-  --accent-warm: #ffb177;
-  --text-dark: #eef3ff;
-  --text-light: #1a1c22;
+  /* Unified "Warm Minimal" theme */
+  --bg-dark: #0a0908;
+  --bg-light: #f5f3ef;
+  --panel-dark: rgba(18, 16, 14, 0.88);
+  --panel-light: rgba(255, 252, 248, 0.9);
+  --accent: #d4b896;
+  --accent-highlight: #e8d5c4;
+  --text-dark: #e8e6e2;
+  --text-light: #1a1816;
+  --text-muted: rgba(232, 230, 226, 0.6);
 }
 
 * {
@@ -19,14 +21,14 @@
 body {
   margin: 0;
   font-family: 'Space Grotesk', system-ui, sans-serif;
-  background: radial-gradient(circle at top, #1b2338 0%, #0a0b12 60%);
+  background: radial-gradient(ellipse at top, #1a1614 0%, #0a0908 70%);
   color: var(--text-dark);
   min-height: 100vh;
   overflow: hidden;
 }
 
 body.light {
-  background: radial-gradient(circle at top, #ffffff 0%, #efe9e1 60%);
+  background: radial-gradient(ellipse at top, #ffffff 0%, #f0ebe5 70%);
   color: var(--text-light);
 }
 
@@ -51,9 +53,9 @@ canvas {
   left: 24px;
   padding: 16px 18px;
   border-radius: 16px;
-  background: rgba(8, 10, 18, 0.55);
+  background: rgba(14, 12, 10, 0.65);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(120, 240, 255, 0.2);
+  border: 1px solid rgba(212, 184, 150, 0.15);
 }
 
 .app.light .hud {
@@ -86,7 +88,7 @@ canvas {
   padding: 18px;
   border-radius: 20px;
   background: var(--panel-dark);
-  border: 1px solid rgba(120, 240, 255, 0.2);
+  border: 1px solid rgba(212, 184, 150, 0.12);
   backdrop-filter: blur(12px);
   display: grid;
   gap: 16px;
@@ -112,7 +114,7 @@ canvas {
 }
 
 .app.light .panel-title {
-  color: #b25b3d;
+  color: #a07050;
 }
 
 label {
@@ -134,14 +136,14 @@ input[type='range'] {
 }
 
 .pill {
-  border: 1px solid rgba(120, 240, 255, 0.35);
+  border: 1px solid rgba(212, 184, 150, 0.25);
   background: transparent;
   color: inherit;
   padding: 6px 12px;
   border-radius: 999px;
   font-size: 12px;
   cursor: pointer;
-  transition: transform 0.2s ease, background 0.2s ease;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
 .pill:disabled {
@@ -152,32 +154,154 @@ input[type='range'] {
 
 .pill:hover {
   transform: translateY(-1px);
+  border-color: rgba(212, 184, 150, 0.4);
 }
 
 .pill.active {
-  background: rgba(120, 240, 255, 0.15);
-  border-color: rgba(120, 240, 255, 0.8);
+  background: rgba(212, 184, 150, 0.12);
+  border-color: rgba(212, 184, 150, 0.6);
 }
 
 .app.light .pill {
-  border-color: rgba(0, 0, 0, 0.12);
+  border-color: rgba(80, 60, 40, 0.15);
 }
 
 .app.light .pill.active {
-  background: rgba(255, 177, 119, 0.2);
-  border-color: rgba(178, 91, 61, 0.6);
+  background: rgba(160, 112, 80, 0.15);
+  border-color: rgba(160, 112, 80, 0.5);
 }
 
+/* === MOBILE BOTTOM SHEET === */
 @media (max-width: 720px) {
-  .panel {
-    left: 16px;
-    right: 16px;
-    bottom: 16px;
+  .hud {
+    top: env(safe-area-inset-top, 12px);
+    left: 12px;
+    right: 12px;
+    padding: 10px 14px;
+    border-radius: 12px;
   }
 
-  .hud {
-    left: 16px;
-    right: 16px;
+  .hud .title {
+    font-size: 15px;
+    margin-bottom: 2px;
+  }
+
+  .hud .status {
+    font-size: 12px;
+  }
+
+  .hud .status.subtle {
+    display: none; /* Hide FPS on mobile to reduce clutter */
+  }
+
+  /* Bottom sheet container */
+  .panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 70vh;
+    padding: 0;
+    border-radius: 20px 20px 0 0;
+    transform: translateY(calc(100% - 56px));
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+  }
+
+  .panel.open {
+    transform: translateY(0);
+  }
+
+  /* Drag handle */
+  .panel-handle {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 12px 0 8px;
+    cursor: grab;
+  }
+
+  .panel-handle::before {
+    content: '';
+    width: 36px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 2px;
+  }
+
+  .app.light .panel-handle::before {
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  /* Scrollable content */
+  .panel-content {
+    padding: 0 16px 24px;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    max-height: calc(70vh - 56px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .panel-section {
+    gap: 12px;
+  }
+
+  /* Touch-friendly controls */
+  label {
+    min-height: 44px;
+    font-size: 13px;
+    justify-content: center;
+  }
+
+  input[type='range'] {
+    height: 44px;
+    margin: 0;
+  }
+
+  .pill {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 16px;
+    font-size: 13px;
+  }
+
+  .pill-row {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  /* Preview repositioning */
+  .preview {
+    left: auto;
+    right: 12px;
+    bottom: 68px;
+    transform: none;
+  }
+
+  .preview.hide {
+    transform: translateY(8px);
+  }
+
+  .preview canvas {
+    width: 120px;
+    height: 68px;
+    border-radius: 8px;
+  }
+
+  .preview-label {
+    font-size: 10px;
+  }
+}
+
+/* Desktop: hide handle */
+@media (min-width: 721px) {
+  .panel-handle {
+    display: none;
+  }
+
+  .panel-content {
+    display: contents;
   }
 }
 
@@ -199,8 +323,8 @@ input[type='range'] {
 .preview-inner {
   padding: 10px;
   border-radius: 16px;
-  background: rgba(8, 10, 18, 0.6);
-  border: 1px solid rgba(120, 240, 255, 0.18);
+  background: rgba(14, 12, 10, 0.7);
+  border: 1px solid rgba(212, 184, 150, 0.12);
   backdrop-filter: blur(10px);
   display: grid;
   gap: 8px;
@@ -216,7 +340,7 @@ input[type='range'] {
   height: 135px;
   border-radius: 12px;
   display: block;
-  background: #0b0d15;
+  background: #0c0a08;
   transform: scaleX(-1); /* Mirror for natural selfie view */
 }
 
@@ -236,16 +360,16 @@ input[type='range'] {
 }
 
 .status-dot.active {
-  background: #7bff9f;
-  box-shadow: 0 0 8px rgba(123, 255, 159, 0.6);
+  background: #d4b896;
+  box-shadow: 0 0 8px rgba(212, 184, 150, 0.5);
 }
 
 .status-dot.idle {
-  background: #7b8899;
+  background: #6b6560;
 }
 
 .status-dot.denied {
-  background: #ff7b7b;
+  background: #c08070;
 }
 
 @media (max-width: 720px) {

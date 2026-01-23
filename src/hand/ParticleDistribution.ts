@@ -411,3 +411,51 @@ function generateFingerChainParticles(
 
 // Export seeded random creator for external use
 export { createSeededRandom };
+
+// === Joint-Link Ribbon Particles ===
+// Creates sparse particles along bone segments for visual connectivity
+
+export type LinkParticleAssignment = {
+  boneId: number;
+  t: number;           // Position along bone [0, 1]
+  region: BoneRegion;
+  finger: number;
+};
+
+// Generate link particles for finger bones (not palm)
+// Creates 2-4 particles per bone evenly spaced along t ∈ [0.15, 0.85]
+export function createLinkDistribution(
+  particlesPerBone: number = 3,
+  seed: number = 99,
+  skeleton: HandSkeleton = HAND_SKELETON
+): LinkParticleAssignment[] {
+  const random = createSeededRandom(seed);
+  const assignments: LinkParticleAssignment[] = [];
+
+  // Only create links for finger bones (not palm)
+  const fingerBones = skeleton.bones.filter((b) => b.region !== 'palm');
+
+  for (const bone of fingerBones) {
+    // Vary particles per bone slightly based on region
+    // Proximal gets more, distal gets fewer
+    let count = particlesPerBone;
+    if (bone.region === 'proximal') count = Math.min(particlesPerBone + 1, 4);
+    else if (bone.region === 'distal') count = Math.max(particlesPerBone - 1, 2);
+
+    for (let i = 0; i < count; i++) {
+      // Evenly space along bone interior (avoid tips)
+      const baseT = 0.15 + (i + 0.5) / count * 0.7; // Maps to [0.15, 0.85]
+      const jitter = (random() - 0.5) * 0.08;
+      const t = Math.max(0.1, Math.min(0.9, baseT + jitter));
+
+      assignments.push({
+        boneId: bone.id,
+        t,
+        region: bone.region,
+        finger: bone.finger,
+      });
+    }
+  }
+
+  return assignments;
+}

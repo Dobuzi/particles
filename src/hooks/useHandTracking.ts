@@ -98,8 +98,9 @@ export function useHandTracking({
         }
       };
 
-      drawHand(left, 'rgba(120, 240, 255, 0.9)', 'rgba(255, 255, 255, 0.95)');
-      drawHand(right, 'rgba(255, 177, 119, 0.9)', 'rgba(255, 240, 210, 0.95)');
+      // Unified warm neutral colors for preview
+      drawHand(left, 'rgba(212, 184, 150, 0.8)', 'rgba(232, 226, 218, 0.9)');
+      drawHand(right, 'rgba(200, 176, 148, 0.8)', 'rgba(232, 226, 218, 0.9)');
     },
     [previewEnabled, previewRef]
   );
