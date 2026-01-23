@@ -9,6 +9,15 @@ npm install
 npm run dev
 ```
 
+## GitHub Pages
+
+This project is configured to deploy from the `main` branch via GitHub Actions.
+After the workflow runs, the site will be available at:
+
+```
+https://dobuzi.github.io/particles/
+```
+
 ## Gesture Guide
 
 - Allow webcam access when prompted.
