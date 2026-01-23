@@ -1,5 +1,5 @@
 import { Canvas } from '@react-three/fiber';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ParticleField } from './components/ParticleField';
 import { useHandDrawing } from './hooks/useHandDrawing';
 
@@ -15,22 +15,35 @@ export default function App() {
   const [perfMode, setPerfMode] = useState(false);
   const [paused, setPaused] = useState(false);
   const [background, setBackground] = useState<'dark' | 'light'>('dark');
+  const [colorMode, setColorMode] = useState<'position' | 'velocity' | 'noise'>(
+    'position'
+  );
+  const [colorIntensity, setColorIntensity] = useState(0.9);
+  const [highContrast, setHighContrast] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
+  const [formationEnabled, setFormationEnabled] = useState(true);
+  const [formationStrength, setFormationStrength] = useState(1.2);
+  const [formationDensity, setFormationDensity] = useState(0.45);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const volume = 2.6;
-  const { shapeRef, state, clearShape } = useHandDrawing({
-    enabled: drawEnabled,
+  const { shapeRef, handTargetsRef, state, clearShape } = useHandDrawing({
+    enabled: drawEnabled && !perfMode,
     volume,
+    previewRef: previewCanvasRef,
+    previewEnabled: showPreview,
   });
 
   const guidance = useMemo(() => {
     if (perfMode) return 'Performance mode (hand tracking off)';
+    if (state.status === 'loading') return 'Initializing hand tracking';
     if (state.status === 'denied') return 'Camera access denied';
     if (state.status === 'error') return 'Camera error';
     if (!drawEnabled) return 'Gesture drawing disabled';
     if (state.status === 'tracking' && !state.isDrawing) return 'Pinch to draw';
     if (state.isDrawing) return 'Drawing in 3D space';
     return 'Show your hand to the camera';
-  }, [drawEnabled, state.isDrawing, state.status]);
+  }, [drawEnabled, perfMode, state.isDrawing, state.status]);
 
   useEffect(() => {
     if (!perfMode) return;
@@ -61,6 +74,13 @@ export default function App() {
           repulsionStrength={repulsionStrength}
           paused={paused}
           perfMode={perfMode}
+          colorMode={colorMode}
+          colorIntensity={colorIntensity}
+          highContrast={highContrast}
+          formationEnabled={formationEnabled}
+          formationStrength={formationStrength}
+          formationDensity={formationDensity}
+          handTargetsRef={handTargetsRef}
           shapeRef={shapeRef}
         />
       </Canvas>
@@ -104,6 +124,40 @@ export default function App() {
         </div>
 
         <div className="panel-section">
+          <div className="panel-title">Color</div>
+          <div className="pill-row">
+            {(['position', 'velocity', 'noise'] as const).map((mode) => (
+              <button
+                key={mode}
+                className={colorMode === mode ? 'pill active' : 'pill'}
+                onClick={() => setColorMode(mode)}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+          <label>
+            Intensity
+            <input
+              type="range"
+              min="0.3"
+              max="1"
+              step="0.05"
+              value={colorIntensity}
+              onChange={(event) => setColorIntensity(Number(event.target.value))}
+            />
+          </label>
+          <div className="pill-row">
+            <button
+              className={highContrast ? 'pill active' : 'pill'}
+              onClick={() => setHighContrast((prev) => !prev)}
+            >
+              {highContrast ? 'High Contrast' : 'Standard Contrast'}
+            </button>
+          </div>
+        </div>
+
+        <div className="panel-section">
           <div className="panel-title">Shape Forces</div>
           <label>
             Attraction
@@ -136,6 +190,40 @@ export default function App() {
               step="0.1"
               value={repulsionStrength}
               onChange={(event) => setRepulsionStrength(Number(event.target.value))}
+            />
+          </label>
+        </div>
+
+        <div className="panel-section">
+          <div className="panel-title">Hand Formation</div>
+          <div className="pill-row">
+            <button
+              className={formationEnabled ? 'pill active' : 'pill'}
+              onClick={() => setFormationEnabled((prev) => !prev)}
+            >
+              {formationEnabled ? 'Dual Hand On' : 'Dual Hand Off'}
+            </button>
+          </div>
+          <label>
+            Strength
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.1"
+              value={formationStrength}
+              onChange={(event) => setFormationStrength(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Density
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={formationDensity}
+              onChange={(event) => setFormationDensity(Number(event.target.value))}
             />
           </label>
         </div>
@@ -176,6 +264,35 @@ export default function App() {
             >
               {perfMode ? 'Perf On' : 'Perf Off'}
             </button>
+            <button className="pill" onClick={() => setShowPreview((prev) => !prev)}>
+              {showPreview ? 'Hide Preview' : 'Show Preview'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className={`preview ${showPreview ? 'show' : 'hide'}`}>
+        <div className="preview-inner">
+          <canvas ref={previewCanvasRef} width={240} height={135} />
+          <div className="preview-label">
+            <span
+              className={
+                state.status === 'denied'
+                  ? 'status-dot denied'
+                  : state.hasHand
+                  ? 'status-dot active'
+                  : 'status-dot idle'
+              }
+            />
+            {state.status === 'denied'
+              ? 'Camera blocked'
+              : perfMode
+              ? 'Tracking off'
+              : state.status === 'loading'
+              ? 'Loading tracker'
+              : state.hasHand
+              ? `${state.hasTwoHands ? '2 hands' : '1 hand'}${state.fps ? ` · ${state.fps.toFixed(0)} FPS` : ''}`
+              : 'No hand'}
           </div>
         </div>
       </div>

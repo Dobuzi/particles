@@ -19,12 +19,15 @@ npm run dev
 
 ## Controls
 
-- Particle presets: 30k / 60k / 120k
+- Particle presets: 20k / 30k / 60k / 120k
 - Flow strength: adjusts the noise-driven velocity
 - Shape forces: attraction, alignment, and repulsion
 - Gesture toggle: enable/disable drawing
 - Pause/resume and light/dark background
 - Perf mode: disables hand tracking and lowers workload
+- Color mode: position/velocity/noise-based gradients to reveal structure
+- Hand preview: shows camera feed + both-hand landmarks with live detection status
+- Dual hand formation: pulls particles into left/right hand-shaped point clouds
 
 ## Performance Tips
 
@@ -34,7 +37,7 @@ npm run dev
 
 ## Architecture Notes
 
-- `src/hooks/useHandDrawing.ts`: MediaPipe Tasks Vision hand tracking + gesture-to-shape mapping
+- `src/hooks/useHandDrawing.ts`: MediaPipe Tasks Vision dual-hand tracking + gesture-to-shape mapping
 - `src/utils/flowField.ts`: simplex-noise flow field
 - `src/components/ParticleField.tsx`: CPU particle simulation and shape force blending
 

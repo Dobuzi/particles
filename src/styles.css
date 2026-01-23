@@ -90,6 +90,7 @@ canvas {
   backdrop-filter: blur(12px);
   display: grid;
   gap: 16px;
+  z-index: 2;
 }
 
 .app.light .panel {
@@ -177,5 +178,83 @@ input[type='range'] {
   .hud {
     left: 16px;
     right: 16px;
+  }
+}
+
+.preview {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 1;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.preview.hide {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(8px);
+}
+
+.preview-inner {
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(8, 10, 18, 0.6);
+  border: 1px solid rgba(120, 240, 255, 0.18);
+  backdrop-filter: blur(10px);
+  display: grid;
+  gap: 8px;
+}
+
+.app.light .preview-inner {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.preview canvas {
+  width: 240px;
+  height: 135px;
+  border-radius: 12px;
+  display: block;
+  background: #0b0d15;
+  transform: scaleX(-1); /* Mirror for natural selfie view */
+}
+
+.preview-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-family: 'Spline Sans Mono', monospace;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.active {
+  background: #7bff9f;
+  box-shadow: 0 0 8px rgba(123, 255, 159, 0.6);
+}
+
+.status-dot.idle {
+  background: #7b8899;
+}
+
+.status-dot.denied {
+  background: #ff7b7b;
+}
+
+@media (max-width: 720px) {
+  .preview {
+    bottom: 8px;
+  }
+
+  .preview canvas {
+    width: 200px;
+    height: 112px;
   }
 }

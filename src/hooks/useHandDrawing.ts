@@ -11,46 +11,146 @@ export type ShapePoint = {
   timestamp: number;
 };
 
+export type HandInfo = {
+  handedness: 'Left' | 'Right' | 'Unknown';
+  landmarks: Array<{ x: number; y: number; z: number }>;
+  confidence?: number;
+};
+
 type HandState = {
-  status: 'idle' | 'ready' | 'tracking' | 'denied' | 'error';
+  status: 'loading' | 'ready' | 'tracking' | 'denied' | 'error';
   message: string;
   isDrawing: boolean;
   points: ShapePoint[];
+  hasHand: boolean;
+  hasTwoHands: boolean;
+  fps: number | null;
+  hands: HandInfo[];
+};
+
+type HandTargetCloud = {
+  data: Float32Array;
+  count: number;
 };
 
 const MAX_POINTS = 400;
 const MIN_POINT_DISTANCE = 0.04;
 const PINCH_DISTANCE = 0.04;
 const FRAME_SKIP = 3;
+const LANDMARK_CONNECTIONS = [
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [3, 4],
+  [0, 5],
+  [5, 6],
+  [6, 7],
+  [7, 8],
+  [5, 9],
+  [9, 10],
+  [10, 11],
+  [11, 12],
+  [9, 13],
+  [13, 14],
+  [14, 15],
+  [15, 16],
+  [13, 17],
+  [17, 18],
+  [18, 19],
+  [19, 20],
+  [0, 17],
+];
+
+const HAND_CHAINS = [
+  [0, 1, 2, 3, 4],
+  [0, 5, 6, 7, 8],
+  [0, 9, 10, 11, 12],
+  [0, 13, 14, 15, 16],
+  [0, 17, 18, 19, 20],
+];
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+const smoothLandmarks = (
+  previous: Array<{ x: number; y: number; z: number }> | null,
+  current: Array<{ x: number; y: number; z: number }>,
+  alpha: number
+) =>
+  current.map((point, idx) => {
+    if (!previous) return point;
+    const prev = previous[idx] || point;
+    return {
+      x: lerp(prev.x, point.x, alpha),
+      y: lerp(prev.y, point.y, alpha),
+      z: lerp(prev.z, point.z, alpha),
+    };
+  });
+
+const resampleSegment = (
+  a: { x: number; y: number; z: number },
+  b: { x: number; y: number; z: number },
+  steps: number
+) => {
+  const points: Array<{ x: number; y: number; z: number }> = [];
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / (steps + 1);
+    points.push({
+      x: lerp(a.x, b.x, t),
+      y: lerp(a.y, b.y, t),
+      z: lerp(a.z, b.z, t),
+    });
+  }
+  return points;
+};
 
 export function useHandDrawing({
   enabled,
   volume,
+  previewRef,
+  previewEnabled,
 }: {
   enabled: boolean;
   volume: number;
+  previewRef: React.MutableRefObject<HTMLCanvasElement | null>;
+  previewEnabled: boolean;
 }) {
   const [state, setState] = useState<HandState>({
-    status: 'idle',
+    status: 'loading',
     message: 'Show your hand to the camera',
     isDrawing: false,
     points: [],
+    hasHand: false,
+    hasTwoHands: false,
+    fps: null,
+    hands: [],
   });
   const shapeRef = useRef<ShapePoint[]>([]);
+  const handTargetsRef = useRef<HandTargetCloud>({ data: new Float32Array(0), count: 0 });
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const landmarkerRef = useRef<HandLandmarker | null>(null);
   const rafRef = useRef<number | null>(null);
+  const lastFrameRef = useRef<number | null>(null);
+  const previousHandsRef = useRef<{
+    left: Array<{ x: number; y: number; z: number }> | null;
+    right: Array<{ x: number; y: number; z: number }> | null;
+    leftWrist: { x: number; y: number; z: number } | null;
+    rightWrist: { x: number; y: number; z: number } | null;
+  }>({ left: null, right: null, leftWrist: null, rightWrist: null });
 
   useEffect(() => {
     if (!enabled) {
       shapeRef.current = [];
+      handTargetsRef.current = { data: new Float32Array(0), count: 0 };
       setState((prev) => ({
         ...prev,
         isDrawing: false,
         points: [],
+        hasHand: false,
+        hasTwoHands: false,
+        hands: [],
+        fps: null,
+        status: 'ready',
         message: 'Gesture drawing is off',
       }));
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -64,6 +164,7 @@ export function useHandDrawing({
 
     const setup = async () => {
       try {
+        setState((prev) => ({ ...prev, status: 'loading', message: 'Loading hand tracker' }));
         const video = document.createElement('video');
         video.autoplay = true;
         video.playsInline = true;
@@ -89,39 +190,232 @@ export function useHandDrawing({
             delegate: 'GPU',
           },
           runningMode: 'VIDEO',
-          numHands: 1,
+          numHands: 2,
         });
         landmarkerRef.current = landmarker;
 
         setState((prev) => ({
           ...prev,
           status: 'ready',
-          message: 'Show your hand to the camera',
+          message: 'Show your hands to the camera',
         }));
+
+        const drawPreview = (
+          left?: Array<{ x: number; y: number; z: number }>,
+          right?: Array<{ x: number; y: number; z: number }>
+        ) => {
+          if (!previewEnabled) return;
+          const canvas = previewRef.current;
+          const videoEl = videoRef.current;
+          if (!canvas || !videoEl) return;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+
+          const drawHand = (
+            landmarks: Array<{ x: number; y: number; z: number }> | undefined,
+            stroke: string,
+            fill: string
+          ) => {
+            if (!landmarks) return;
+            ctx.strokeStyle = stroke;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (const [start, end] of LANDMARK_CONNECTIONS) {
+              const a = landmarks[start];
+              const b = landmarks[end];
+              ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
+              ctx.lineTo(b.x * canvas.width, b.y * canvas.height);
+            }
+            ctx.stroke();
+
+            ctx.fillStyle = fill;
+            for (const point of landmarks) {
+              ctx.beginPath();
+              ctx.arc(point.x * canvas.width, point.y * canvas.height, 3, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          };
+
+          drawHand(left, 'rgba(120, 240, 255, 0.9)', 'rgba(255, 255, 255, 0.95)');
+          drawHand(right, 'rgba(255, 177, 119, 0.9)', 'rgba(255, 240, 210, 0.95)');
+        };
+
+        const buildHandTargets = (
+          landmarks: Array<{ x: number; y: number; z: number }>,
+          depth: number,
+          handId: number
+        ) => {
+          const points: Array<{ x: number; y: number; z: number; handId: number }> = [];
+          const depthOffset = (depth - 0.5) * 2 * volume;
+          const depthScale = volume * 0.6;
+          const toWorld = (p: { x: number; y: number; z: number }) => ({
+            x: (p.x - 0.5) * 2 * volume,
+            y: (0.5 - p.y) * 2 * volume,
+            z: depthOffset + (p.z || 0) * depthScale,
+            handId,
+          });
+
+          landmarks.forEach((p) => points.push(toWorld(p)));
+
+          for (const chain of HAND_CHAINS) {
+            for (let i = 0; i < chain.length - 1; i += 1) {
+              const a = landmarks[chain[i]];
+              const b = landmarks[chain[i + 1]];
+              resampleSegment(a, b, 6).forEach((p) => points.push(toWorld(p)));
+            }
+          }
+
+          return points;
+        };
 
         const tick = () => {
           if (!mounted || !landmarkerRef.current || !videoRef.current) return;
           frameCount += 1;
           if (frameCount % FRAME_SKIP === 0) {
             const now = performance.now();
-            const result = landmarkerRef.current.detectForVideo(
-              videoRef.current,
-              now
-            );
+            let result;
+            try {
+              result = landmarkerRef.current.detectForVideo(
+                videoRef.current,
+                now
+              );
+            } catch (error) {
+              setState((prev) => ({
+                ...prev,
+                status: 'error',
+                message: 'Hand tracking error',
+              }));
+              console.error(error);
+              rafRef.current = requestAnimationFrame(tick);
+              return;
+            }
 
-            if (!result.landmarks || result.landmarks.length === 0) {
+            if (lastFrameRef.current) {
+              const delta = now - lastFrameRef.current;
+              const fps = delta > 0 ? 1000 / delta : 0;
+              setState((prev) => ({
+                ...prev,
+                fps: prev.fps ? prev.fps * 0.8 + fps * 0.2 : fps,
+              }));
+            }
+            lastFrameRef.current = now;
+
+            const landmarksList = result.landmarks || [];
+            const handednessList = result.handednesses || [];
+            const detectedHands: HandInfo[] = [];
+
+            let leftLandmarks: Array<{ x: number; y: number; z: number }> | null = null;
+            let rightLandmarks: Array<{ x: number; y: number; z: number }> | null = null;
+
+            for (let i = 0; i < landmarksList.length; i += 1) {
+              const landmarks = landmarksList[i];
+              const handednessInfo = handednessList[i]?.[0];
+              const label = handednessInfo?.categoryName === 'Left'
+                ? 'Left'
+                : handednessInfo?.categoryName === 'Right'
+                ? 'Right'
+                : 'Unknown';
+              const confidence = handednessInfo?.score;
+
+              const wrist = landmarks[0];
+              if (label === 'Left') {
+                leftLandmarks = landmarks;
+              } else if (label === 'Right') {
+                rightLandmarks = landmarks;
+              } else if (!leftLandmarks || !rightLandmarks) {
+                const prevLeft = previousHandsRef.current.leftWrist;
+                const prevRight = previousHandsRef.current.rightWrist;
+                if (prevLeft && prevRight) {
+                  const distLeft = Math.hypot(
+                    wrist.x - prevLeft.x,
+                    wrist.y - prevLeft.y,
+                    (wrist.z || 0) - prevLeft.z
+                  );
+                  const distRight = Math.hypot(
+                    wrist.x - prevRight.x,
+                    wrist.y - prevRight.y,
+                    (wrist.z || 0) - prevRight.z
+                  );
+                  if (distLeft <= distRight && !leftLandmarks) leftLandmarks = landmarks;
+                  else if (!rightLandmarks) rightLandmarks = landmarks;
+                } else if (!leftLandmarks) {
+                  leftLandmarks = landmarks;
+                } else {
+                  rightLandmarks = landmarks;
+                }
+              }
+
+              detectedHands.push({
+                handedness: label,
+                landmarks,
+                confidence,
+              });
+            }
+
+            const leftSmoothed = leftLandmarks
+              ? smoothLandmarks(previousHandsRef.current.left, leftLandmarks, 0.35)
+              : null;
+            const rightSmoothed = rightLandmarks
+              ? smoothLandmarks(previousHandsRef.current.right, rightLandmarks, 0.35)
+              : null;
+
+            previousHandsRef.current.left = leftSmoothed;
+            previousHandsRef.current.right = rightSmoothed;
+            previousHandsRef.current.leftWrist = leftSmoothed ? leftSmoothed[0] : null;
+            previousHandsRef.current.rightWrist = rightSmoothed ? rightSmoothed[0] : null;
+
+            const hands: HandInfo[] = [];
+            if (leftSmoothed) {
+              hands.push({ handedness: 'Left', landmarks: leftSmoothed });
+            }
+            if (rightSmoothed) {
+              hands.push({ handedness: 'Right', landmarks: rightSmoothed });
+            }
+
+            if (hands.length === 0) {
+              handTargetsRef.current = { data: new Float32Array(0), count: 0 };
               setState((prev) => ({
                 ...prev,
                 status: 'ready',
-                message: 'Show your hand to the camera',
+                message: 'Show your hands to the camera',
                 isDrawing: false,
+                hasHand: false,
+                hasTwoHands: false,
+                hands: [],
               }));
+              drawPreview();
             } else {
-              const landmarks = result.landmarks[0];
-              const indexTip = landmarks[8];
-              const thumbTip = landmarks[4];
-              const wrist = landmarks[0];
-              const middleMcp = landmarks[9];
+              const targets: Array<{ x: number; y: number; z: number; handId: number }> = [];
+              hands.forEach((hand, idx) => {
+                const wrist = hand.landmarks[0];
+                const middleMcp = hand.landmarks[9];
+                const handSpan = Math.hypot(
+                  wrist.x - middleMcp.x,
+                  wrist.y - middleMcp.y,
+                  (wrist.z || 0) - (middleMcp.z || 0)
+                );
+                const depth = Math.max(0, Math.min(1, 0.4 / Math.max(handSpan, 0.05)));
+                const handTargets = buildHandTargets(hand.landmarks, depth, idx);
+                targets.push(...handTargets);
+              });
+
+              const targetArray = new Float32Array(targets.length * 4);
+              targets.forEach((point, index) => {
+                const base = index * 4;
+                targetArray[base] = point.x;
+                targetArray[base + 1] = point.y;
+                targetArray[base + 2] = point.z;
+                targetArray[base + 3] = point.handId;
+              });
+              handTargetsRef.current = { data: targetArray, count: targets.length };
+
+              const activeHand = hands[0];
+              const indexTip = activeHand.landmarks[8];
+              const thumbTip = activeHand.landmarks[4];
+              const wrist = activeHand.landmarks[0];
+              const middleMcp = activeHand.landmarks[9];
 
               const pinchDistance = Math.hypot(
                 indexTip.x - thumbTip.x,
@@ -135,7 +429,6 @@ export function useHandDrawing({
                 (wrist.z || 0) - (middleMcp.z || 0)
               );
 
-              // Map hand scale to a pseudo-depth so closer hands push the stroke forward.
               const depth = Math.max(0, Math.min(1, 0.4 / Math.max(handSpan, 0.05)));
               const target = {
                 x: (indexTip.x - 0.5) * 2 * volume,
@@ -164,7 +457,6 @@ export function useHandDrawing({
                 ) {
                   const prev =
                     shapeRef.current[shapeRef.current.length - 2] || smooth;
-                  // Approximate local tangent for alignment behavior.
                   const tangent = {
                     x: smooth.x - prev.x,
                     y: smooth.y - prev.y,
@@ -187,6 +479,9 @@ export function useHandDrawing({
                     status: 'tracking',
                     message: 'Pinch to draw',
                     points: shapeRef.current,
+                    hasHand: true,
+                    hasTwoHands: hands.length > 1,
+                    hands,
                   }));
                 } else {
                   setState((prevState) => ({
@@ -195,6 +490,9 @@ export function useHandDrawing({
                     status: 'tracking',
                     message: 'Pinch to draw',
                     points: shapeRef.current,
+                    hasHand: true,
+                    hasTwoHands: hands.length > 1,
+                    hands,
                   }));
                 }
               } else {
@@ -204,8 +502,13 @@ export function useHandDrawing({
                   status: 'tracking',
                   message: 'Pinch to draw',
                   points: shapeRef.current,
+                  hasHand: true,
+                  hasTwoHands: hands.length > 1,
+                  hands,
                 }));
               }
+
+              drawPreview(leftSmoothed || undefined, rightSmoothed || undefined);
             }
           }
 
@@ -232,7 +535,7 @@ export function useHandDrawing({
       streamRef.current?.getTracks().forEach((track) => track.stop());
       landmarkerRef.current?.close();
     };
-  }, [enabled, volume]);
+  }, [enabled, volume, previewEnabled, previewRef]);
 
   const clearShape = useCallback(() => {
     shapeRef.current = [];
@@ -244,6 +547,7 @@ export function useHandDrawing({
 
   return {
     shapeRef,
+    handTargetsRef,
     state,
     clearShape,
   };
