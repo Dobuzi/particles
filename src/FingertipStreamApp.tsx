@@ -8,11 +8,35 @@ import { HandParticleSystem } from './components/HandParticleSystem';
 import { ClayParticleSystem } from './components/ClayParticleSystem';
 import { HandConnectionLines, ClayConnectionLines } from './components/ConnectionLines';
 import { useHandTracking } from './hooks/useHandTracking';
-import type { ClaySimulation } from './simulation/ClaySimulation';
+import { forceMerge, type ClaySimulation } from './simulation/ClaySimulation';
 
 // Mobile detection and performance
 const isMobile = () => window.matchMedia('(max-width: 720px)').matches;
 const getMobileDPR = () => isMobile() ? Math.min(window.devicePixelRatio, 1.5) : window.devicePixelRatio;
+
+// Sculpt tool modes
+export type SculptToolMode = 'grab' | 'stretch' | 'refine';
+
+// Refine sub-tool modes
+export type RefineMode = 'scrape' | 'flatten';
+export type RefineBrush = 'smooth' | 'carve' | 'stamp';
+
+const TOOL_MODE_INFO: Record<SculptToolMode, { label: string; description: string }> = {
+  grab: { label: 'Grab', description: 'Pick and pull clay' },
+  stretch: { label: 'Stretch', description: 'Two-point deformation' },
+  refine: { label: 'Refine', description: 'Surface refinement' },
+};
+
+const REFINE_MODE_INFO: Record<RefineMode, { label: string; description: string }> = {
+  scrape: { label: 'Scrape', description: 'Stroke to smooth/shape' },
+  flatten: { label: 'Flatten', description: 'Press to flatten' },
+};
+
+const REFINE_BRUSH_INFO: Record<RefineBrush, { label: string; description: string }> = {
+  smooth: { label: 'Smooth', description: 'Relax surface' },
+  carve: { label: 'Carve', description: 'Create grooves' },
+  stamp: { label: 'Stamp', description: 'Imprint pattern' },
+};
 
 // Mode preset settings bundle
 // See docs/art-direction-modes.md for design rationale
@@ -37,6 +61,8 @@ type ModePreset = {
     clayParticles: number;
     clayRadius: number;
     sculptStrength: number;
+    sculptRadius: number;
+    sculptMemoryRate: number;
     showHandLines: boolean;
     showClayLines: boolean;
     // Clay jitter (organic life)
@@ -68,7 +94,9 @@ const MODE_PRESETS: Record<string, ModePreset> = {
       showClay: false,
       clayParticles: 60,
       clayRadius: 1.0,
-      sculptStrength: 0.5,
+      sculptStrength: 0.3,         // Low: mostly point dragging
+      sculptRadius: 0.5,           // Small influence region
+      sculptMemoryRate: 0.03,      // Low memory retention
       showHandLines: true,
       showClayLines: false,
       clayJitterAmplitude: 0.0,    // Near-still
@@ -95,7 +123,9 @@ const MODE_PRESETS: Record<string, ModePreset> = {
       showClay: true,
       clayParticles: 120,
       clayRadius: 1.4,
-      sculptStrength: 0.8,
+      sculptStrength: 0.8,         // Strong: responsive deformation
+      sculptRadius: 1.0,           // Large influence region
+      sculptMemoryRate: 0.12,      // High memory retention
       showHandLines: true,
       showClayLines: true,
       clayJitterAmplitude: 0.002,  // Subtle, precise control
@@ -122,7 +152,9 @@ const MODE_PRESETS: Record<string, ModePreset> = {
       showClay: false,
       clayParticles: 80,
       clayRadius: 1.0,
-      sculptStrength: 0.5,
+      sculptStrength: 0.5,         // Medium: softer sculpt
+      sculptRadius: 0.7,           // Medium influence
+      sculptMemoryRate: 0.04,      // Low: more elastic recovery
       showHandLines: false,
       showClayLines: false,
       clayJitterAmplitude: 0.006,  // Moderate (if clay enabled)
@@ -149,7 +181,9 @@ const MODE_PRESETS: Record<string, ModePreset> = {
       showClay: true,
       clayParticles: 80,
       clayRadius: 1.1,
-      sculptStrength: 0.6,
+      sculptStrength: 0.4,         // Lower: structure preserved
+      sculptRadius: 0.4,           // Small: limited deformation
+      sculptMemoryRate: 0.03,      // Low: maintain structure
       showHandLines: true,
       showClayLines: true,
       clayJitterAmplitude: 0.001,  // Barely perceptible
@@ -176,7 +210,9 @@ const MODE_PRESETS: Record<string, ModePreset> = {
       showClay: true,
       clayParticles: 100,
       clayRadius: 1.3,
-      sculptStrength: 0.7,
+      sculptStrength: 0.75,        // High: strong sculpt
+      sculptRadius: 0.9,           // Large influence
+      sculptMemoryRate: 0.10,      // High memory retention
       showHandLines: true,
       showClayLines: true,
       clayJitterAmplitude: 0.004,  // Noticeable life
@@ -195,6 +231,13 @@ export default function FingertipStreamApp() {
   const [background, setBackground] = useState<'dark' | 'light'>('dark');
   const [showPreview, setShowPreview] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
+
+  // Sculpt tool mode (gesture-free switching)
+  const [toolMode, setToolMode] = useState<SculptToolMode>('grab');
+
+  // Refine sub-tool state
+  const [refineMode, setRefineMode] = useState<RefineMode>('scrape');
+  const [refineBrush, setRefineBrush] = useState<RefineBrush>('smooth');
 
   // All adjustable parameters (initialized from sculpt preset)
   const defaultSettings = MODE_PRESETS.sculpt.settings;
@@ -215,6 +258,8 @@ export default function FingertipStreamApp() {
   const [clayParticles, setClayParticles] = useState(defaultSettings.clayParticles);
   const [clayRadius, setClayRadius] = useState(defaultSettings.clayRadius);
   const [sculptStrength, setSculptStrength] = useState(defaultSettings.sculptStrength);
+  const [sculptRadius, setSculptRadius] = useState(defaultSettings.sculptRadius);
+  const [sculptMemoryRate, setSculptMemoryRate] = useState(defaultSettings.sculptMemoryRate);
   const [showHandLines, setShowHandLines] = useState(defaultSettings.showHandLines);
   const [showClayLines, setShowClayLines] = useState(defaultSettings.showClayLines);
   const [clayJitterAmplitude, setClayJitterAmplitude] = useState(defaultSettings.clayJitterAmplitude);
@@ -222,6 +267,9 @@ export default function FingertipStreamApp() {
 
   // Clay simulation ref (for connection lines)
   const [claySimulation, setClaySimulation] = useState<ClaySimulation | null>(null);
+
+  // Clay split status
+  const [claySplit, setClaySplit] = useState(false);
 
   // Apply mode preset (does not reset clay shape)
   const applyMode = useCallback((modeKey: string) => {
@@ -247,6 +295,8 @@ export default function FingertipStreamApp() {
     setClayParticles(s.clayParticles);
     setClayRadius(s.clayRadius);
     setSculptStrength(s.sculptStrength);
+    setSculptRadius(s.sculptRadius);
+    setSculptMemoryRate(s.sculptMemoryRate);
     setShowHandLines(s.showHandLines);
     setShowClayLines(s.showClayLines);
     setClayJitterAmplitude(s.clayJitterAmplitude);
@@ -319,9 +369,15 @@ export default function FingertipStreamApp() {
           paused={paused}
           blobRadius={clayRadius}
           sculptStrength={sculptStrength}
+          sculptRadius={sculptRadius}
+          sculptMemoryRate={sculptMemoryRate}
           jitterAmplitude={clayJitterAmplitude}
           jitterSpeed={clayJitterSpeed}
+          toolMode={toolMode}
+          refineMode={refineMode}
+          refineBrush={refineBrush}
           onSimulationReady={setClaySimulation}
+          onSplitStatusChange={setClaySplit}
         />
         <HandConnectionLines
           handsRef={handsRef}
@@ -391,6 +447,76 @@ export default function FingertipStreamApp() {
             {MODE_PRESETS[currentMode]?.description}
           </div>
         </div>
+
+        {/* Sculpt Tool Selector */}
+        {showClay && (
+          <div className="panel-section">
+            <div className="panel-title">Sculpt Tool</div>
+            <div className="tool-selector">
+              {(['grab', 'stretch', 'refine'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  className={`tool-btn ${toolMode === mode ? 'active' : ''}`}
+                  onClick={() => setToolMode(mode)}
+                  title={TOOL_MODE_INFO[mode].description}
+                >
+                  {TOOL_MODE_INFO[mode].label}
+                </button>
+              ))}
+            </div>
+            <div className="tool-description">
+              {toolMode === 'refine'
+                ? `${REFINE_MODE_INFO[refineMode].label}: ${REFINE_BRUSH_INFO[refineBrush].description}`
+                : TOOL_MODE_INFO[toolMode].description}
+            </div>
+
+            {/* Refine sub-tools (shown only when Refine is active) */}
+            {toolMode === 'refine' && (
+              <div className="refine-controls">
+                {/* Scrape/Flatten mode toggle */}
+                <div className="refine-mode-selector">
+                  {(['scrape', 'flatten'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      className={`refine-mode-btn ${refineMode === mode ? 'active' : ''}`}
+                      onClick={() => setRefineMode(mode)}
+                      title={REFINE_MODE_INFO[mode].description}
+                    >
+                      {REFINE_MODE_INFO[mode].label}
+                    </button>
+                  ))}
+                </div>
+                {/* Brush type toggle */}
+                <div className="refine-brush-selector">
+                  {(['smooth', 'carve', 'stamp'] as const).map((brush) => (
+                    <button
+                      key={brush}
+                      className={`refine-brush-btn ${refineBrush === brush ? 'active' : ''}`}
+                      onClick={() => setRefineBrush(brush)}
+                      title={REFINE_BRUSH_INFO[brush].description}
+                    >
+                      {REFINE_BRUSH_INFO[brush].label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {claySplit && (
+              <button
+                className="merge-btn"
+                onClick={() => {
+                  if (claySimulation) {
+                    forceMerge(claySimulation);
+                    setClaySplit(false);
+                  }
+                }}
+              >
+                Merge Clay
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Quick Toggles */}
         <div className="panel-section">
@@ -691,14 +817,36 @@ export default function FingertipStreamApp() {
                   />
                 </label>
                 <label>
-                  Sculpt Strength: {sculptStrength.toFixed(1)}
+                  Sculpt Strength: {sculptStrength.toFixed(2)}
                   <input
                     type="range"
                     min="0.1"
                     max="1.0"
-                    step="0.1"
+                    step="0.05"
                     value={sculptStrength}
                     onChange={(e) => setSculptStrength(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  Sculpt Radius: {sculptRadius.toFixed(2)}
+                  <input
+                    type="range"
+                    min="0.3"
+                    max="1.5"
+                    step="0.05"
+                    value={sculptRadius}
+                    onChange={(e) => setSculptRadius(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  Sculpt Memory: {sculptMemoryRate.toFixed(2)}
+                  <input
+                    type="range"
+                    min="0.01"
+                    max="0.2"
+                    step="0.01"
+                    value={sculptMemoryRate}
+                    onChange={(e) => setSculptMemoryRate(Number(e.target.value))}
                   />
                 </label>
               </div>

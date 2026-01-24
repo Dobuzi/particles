@@ -584,6 +584,161 @@ input[type='range'] {
   color: rgba(26, 24, 22, 0.5);
 }
 
+/* Tool Selector (Grab/Stretch/Refine) */
+.tool-selector {
+  display: flex;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.tool-btn {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tool-btn:hover {
+  background: rgba(212, 184, 150, 0.1);
+}
+
+.tool-btn.active {
+  background: var(--accent);
+  color: #1a1816;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.app.light .tool-selector {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.app.light .tool-btn:hover {
+  background: rgba(160, 112, 80, 0.1);
+}
+
+.app.light .tool-btn.active {
+  background: #a07050;
+  color: #fff;
+}
+
+.tool-description {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 4px;
+  text-align: center;
+}
+
+.app.light .tool-description {
+  color: rgba(26, 24, 22, 0.5);
+}
+
+/* Refine Sub-controls */
+.refine-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.refine-mode-selector,
+.refine-brush-selector {
+  display: flex;
+  gap: 3px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.refine-mode-btn,
+.refine-brush-btn {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-height: 32px;
+}
+
+.refine-mode-btn:hover,
+.refine-brush-btn:hover {
+  background: rgba(212, 184, 150, 0.1);
+}
+
+.refine-mode-btn.active {
+  background: rgba(212, 184, 150, 0.6);
+  color: #1a1816;
+}
+
+.refine-brush-btn.active {
+  background: rgba(212, 184, 150, 0.4);
+  color: #1a1816;
+}
+
+.app.light .refine-mode-selector,
+.app.light .refine-brush-selector {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.app.light .refine-mode-btn:hover,
+.app.light .refine-brush-btn:hover {
+  background: rgba(160, 112, 80, 0.1);
+}
+
+.app.light .refine-mode-btn.active {
+  background: rgba(160, 112, 80, 0.4);
+  color: #1a1816;
+}
+
+.app.light .refine-brush-btn.active {
+  background: rgba(160, 112, 80, 0.25);
+  color: #1a1816;
+}
+
+/* Merge Button */
+.merge-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 2px solid var(--accent);
+  background: rgba(212, 184, 150, 0.15);
+  color: var(--accent);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.merge-btn:hover {
+  background: var(--accent);
+  color: #1a1816;
+}
+
+.app.light .merge-btn {
+  border-color: #a07050;
+  background: rgba(160, 112, 80, 0.1);
+  color: #a07050;
+}
+
+.app.light .merge-btn:hover {
+  background: #a07050;
+  color: #fff;
+}
+
 /* === CUSTOMIZE BUTTON === */
 .customize-btn {
   width: 100%;

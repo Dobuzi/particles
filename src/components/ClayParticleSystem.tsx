@@ -6,6 +6,7 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Vec3, HandInfo } from '../types';
+import type { SculptToolMode, RefineMode, RefineBrush } from '../FingertipStreamApp';
 import { useGestures } from '../hooks/useGestures';
 import {
   createClaySimulation,
@@ -14,6 +15,12 @@ import {
   updateClayConfig,
   applyAttraction,
   applySqueeze,
+  applyScrape,
+  applyFlatten,
+  applyCarve,
+  applyStamp,
+  applyFlattenCarve,
+  applyFlattenStamp,
   resetClay,
   findNearestParticle,
   pinParticleLeft,
@@ -24,7 +31,13 @@ import {
   unpinParticleRight,
   getPinnedParticleLeft,
   getPinnedParticleRight,
+  getSculptStateLeft,
+  getSculptStateRight,
+  checkAndApplySplit,
+  isClaySplit,
+  forceMerge,
   type ClaySimulation,
+  type SculptState,
 } from '../simulation/ClaySimulation';
 import { xorshift32 } from '../utils/math';
 
@@ -46,10 +59,12 @@ type ClayParticleSystemProps = {
   blobRadius?: number;
   cohesionStrength?: number;
   surfaceTension?: number;
-  // Interaction
+  // Interaction / Sculpting
   sculptStrength?: number;
-  pickEnabled?: boolean;      // Enable pick-and-move (default true)
-  pickRadius?: number;        // Radius for particle selection
+  sculptRadius?: number;        // Radius of sculpt influence region
+  sculptMemoryRate?: number;    // How fast sculpted regions remember shape
+  pickEnabled?: boolean;        // Enable pick-and-move (default true)
+  pickRadius?: number;          // Radius for particle selection
   // Jitter (organic life)
   jitterAmplitude?: number;   // Amplitude of coherent noise jitter
   jitterSpeed?: number;       // Speed of jitter animation
@@ -57,8 +72,14 @@ type ClayParticleSystemProps = {
   colorHue?: number;          // Base hue [0, 1]
   particleSize?: number;
   glowIntensity?: number;
+  // Tool mode
+  toolMode?: SculptToolMode;  // Current sculpt tool mode
+  refineMode?: RefineMode;    // Scrape or Flatten
+  refineBrush?: RefineBrush;  // Smooth, Carve, or Stamp
   // Expose simulation for connection lines
   onSimulationReady?: (sim: ClaySimulation | null) => void;
+  // Split status callback
+  onSplitStatusChange?: (isSplit: boolean) => void;
 };
 
 export function ClayParticleSystem({
@@ -70,6 +91,8 @@ export function ClayParticleSystem({
   cohesionStrength = 0.4,
   surfaceTension = 0.15,
   sculptStrength = 0.5,
+  sculptRadius = 0.8,
+  sculptMemoryRate = 0.08,
   pickEnabled = true,
   pickRadius = 0.4,
   jitterAmplitude = 0.002,
@@ -77,11 +100,16 @@ export function ClayParticleSystem({
   colorHue = 0.05,        // Terracotta (natural clay)
   particleSize = 0.35,
   glowIntensity = 0.4,
+  toolMode = 'grab',
+  refineMode = 'scrape',
+  refineBrush = 'smooth',
   onSimulationReady,
+  onSplitStatusChange,
 }: ClayParticleSystemProps) {
   const geometryRef = useRef<THREE.BufferGeometry>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
   const simulationRef = useRef<ClaySimulation | null>(null);
+  const prevSplitStatusRef = useRef<boolean>(false);
   const { updateGestures } = useGestures();
 
   // Initialize simulation
@@ -91,6 +119,9 @@ export function ClayParticleSystem({
         blobRadius,
         cohesionStrength,
         surfaceTension,
+        sculptRadius,
+        sculptStrength,
+        sculptMemoryRate,
         jitterAmplitude,
         jitterSpeed,
       });
@@ -99,7 +130,7 @@ export function ClayParticleSystem({
       simulationRef.current = null;
       onSimulationReady?.(null);
     }
-  }, [enabled, particleCount, blobRadius, cohesionStrength, surfaceTension, jitterAmplitude, jitterSpeed, onSimulationReady]);
+  }, [enabled, particleCount, blobRadius, cohesionStrength, surfaceTension, sculptRadius, sculptStrength, sculptMemoryRate, jitterAmplitude, jitterSpeed, onSimulationReady]);
 
   // Update config when props change
   useEffect(() => {
@@ -108,11 +139,14 @@ export function ClayParticleSystem({
         blobRadius,
         cohesionStrength,
         surfaceTension,
+        sculptRadius,
+        sculptStrength,
+        sculptMemoryRate,
         jitterAmplitude,
         jitterSpeed,
       });
     }
-  }, [blobRadius, cohesionStrength, surfaceTension, jitterAmplitude, jitterSpeed]);
+  }, [blobRadius, cohesionStrength, surfaceTension, sculptRadius, sculptStrength, sculptMemoryRate, jitterAmplitude, jitterSpeed]);
 
   // Initialize particle buffers
   const { positions, colors, scales, noiseSeeds } = useMemo(() => {
@@ -187,6 +221,19 @@ export function ClayParticleSystem({
     rightHolding: false,
   });
 
+  // Refine tool state: track stroke for scrape/flatten
+  const refineStateRef = useRef<{
+    active: boolean;
+    prevPos: Vec3 | null;
+    lastStampTime: number;      // For stamp brush rate-limiting
+    lastStampPos: Vec3 | null;  // For stamp brush distance-based rate-limiting
+  }>({
+    active: false,
+    prevPos: null,
+    lastStampTime: 0,
+    lastStampPos: null,
+  });
+
   // Pinch thresholds for pick-and-move
   const PINCH_START_THRESHOLD = 0.6;   // Start picking when pinch is this strong
   const PINCH_HOLD_THRESHOLD = 0.3;    // Keep holding until pinch drops below this
@@ -216,27 +263,36 @@ export function ClayParticleSystem({
       ? landmarkToWorld(gestures.rightPinchPoint, VOLUME)
       : null;
 
-    // === PICK-AND-MOVE LOGIC ===
-    if (pickEnabled) {
+    // === TOOL-ROUTED INTERACTION LOGIC ===
+    const refine = refineStateRef.current;
+
+    // Clean up state when switching modes
+    if (toolMode !== 'grab' && (pick.leftHolding || pick.rightHolding)) {
+      if (pick.leftHolding) { unpinParticleLeft(sim); pick.leftHolding = false; }
+      if (pick.rightHolding) { unpinParticleRight(sim); pick.rightHolding = false; }
+    }
+    if (toolMode !== 'refine' && refine.active) {
+      refine.active = false;
+      refine.prevPos = null;
+    }
+
+    // === GRAB TOOL ===
+    if (toolMode === 'grab' && pickEnabled) {
       // Left hand pick-and-move
       if (worldLeftPinch) {
         if (!pick.leftHolding && gestures.leftPinchStrength >= PINCH_START_THRESHOLD) {
-          // Start picking: find nearest particle
           const nearestIdx = findNearestParticle(sim, worldLeftPinch, pickRadius);
           if (nearestIdx !== null) {
             pinParticleLeft(sim, nearestIdx, worldLeftPinch);
             pick.leftHolding = true;
           }
         } else if (pick.leftHolding && gestures.leftPinchStrength >= PINCH_HOLD_THRESHOLD) {
-          // Continue dragging: update pin target
           updatePinTargetLeft(sim, worldLeftPinch);
         } else if (pick.leftHolding && gestures.leftPinchStrength < PINCH_HOLD_THRESHOLD) {
-          // Release: unpin particle
           unpinParticleLeft(sim);
           pick.leftHolding = false;
         }
       } else if (pick.leftHolding) {
-        // Hand lost: release
         unpinParticleLeft(sim);
         pick.leftHolding = false;
       }
@@ -244,49 +300,183 @@ export function ClayParticleSystem({
       // Right hand pick-and-move
       if (worldRightPinch) {
         if (!pick.rightHolding && gestures.rightPinchStrength >= PINCH_START_THRESHOLD) {
-          // Start picking: find nearest particle
           const nearestIdx = findNearestParticle(sim, worldRightPinch, pickRadius);
           if (nearestIdx !== null) {
             pinParticleRight(sim, nearestIdx, worldRightPinch);
             pick.rightHolding = true;
           }
         } else if (pick.rightHolding && gestures.rightPinchStrength >= PINCH_HOLD_THRESHOLD) {
-          // Continue dragging: update pin target
           updatePinTargetRight(sim, worldRightPinch);
         } else if (pick.rightHolding && gestures.rightPinchStrength < PINCH_HOLD_THRESHOLD) {
-          // Release: unpin particle
           unpinParticleRight(sim);
           pick.rightHolding = false;
         }
       } else if (pick.rightHolding) {
-        // Hand lost: release
         unpinParticleRight(sim);
         pick.rightHolding = false;
       }
+
+      // Attraction sculpting (when not picking)
+      if (worldLeftPinch && gestures.leftPinchStrength > 0.1 && !pick.leftHolding) {
+        applyAttraction(sim, worldLeftPinch, blobRadius * 1.5, gestures.leftPinchStrength * sculptStrength * 0.03);
+      }
+      if (worldRightPinch && gestures.rightPinchStrength > 0.1 && !pick.rightHolding) {
+        applyAttraction(sim, worldRightPinch, blobRadius * 1.5, gestures.rightPinchStrength * sculptStrength * 0.03);
+      }
     }
 
-    // === ATTRACTION SCULPTING (when not picking) ===
-    // Only apply attraction when NOT holding a pinned particle
-    if (worldLeftPinch && gestures.leftPinchStrength > 0.1 && !pick.leftHolding) {
-      applyAttraction(sim, worldLeftPinch, blobRadius * 1.5, gestures.leftPinchStrength * sculptStrength * 0.03);
-    }
-    if (worldRightPinch && gestures.rightPinchStrength > 0.1 && !pick.rightHolding) {
-      applyAttraction(sim, worldRightPinch, blobRadius * 1.5, gestures.rightPinchStrength * sculptStrength * 0.03);
+    // === STRETCH TOOL ===
+    if (toolMode === 'stretch') {
+      // Both hands: pick particles for two-point stretch
+      if (worldLeftPinch && gestures.leftPinchStrength >= PINCH_START_THRESHOLD) {
+        if (!pick.leftHolding) {
+          const nearestIdx = findNearestParticle(sim, worldLeftPinch, pickRadius * 1.5);
+          if (nearestIdx !== null) {
+            pinParticleLeft(sim, nearestIdx, worldLeftPinch);
+            pick.leftHolding = true;
+          }
+        } else {
+          updatePinTargetLeft(sim, worldLeftPinch);
+        }
+      } else if (pick.leftHolding && gestures.leftPinchStrength < PINCH_HOLD_THRESHOLD) {
+        unpinParticleLeft(sim);
+        pick.leftHolding = false;
+      }
+
+      if (worldRightPinch && gestures.rightPinchStrength >= PINCH_START_THRESHOLD) {
+        if (!pick.rightHolding) {
+          const nearestIdx = findNearestParticle(sim, worldRightPinch, pickRadius * 1.5);
+          if (nearestIdx !== null) {
+            pinParticleRight(sim, nearestIdx, worldRightPinch);
+            pick.rightHolding = true;
+          }
+        } else {
+          updatePinTargetRight(sim, worldRightPinch);
+        }
+      } else if (pick.rightHolding && gestures.rightPinchStrength < PINCH_HOLD_THRESHOLD) {
+        unpinParticleRight(sim);
+        pick.rightHolding = false;
+      }
+
+      // Release if hand lost
+      if (!worldLeftPinch && pick.leftHolding) {
+        unpinParticleLeft(sim);
+        pick.leftHolding = false;
+      }
+      if (!worldRightPinch && pick.rightHolding) {
+        unpinParticleRight(sim);
+        pick.rightHolding = false;
+      }
+
+      // Check for split when both hands are grabbing and pulling apart
+      if (pick.leftHolding && pick.rightHolding && worldLeftPinch && worldRightPinch) {
+        checkAndApplySplit(sim, worldLeftPinch, worldRightPinch);
+      }
     }
 
-    // Grab: squeeze the blob
+    // === REFINE TOOL (Scrape or Flatten, with brush variations) ===
+    if (toolMode === 'refine') {
+      // Use primary pinch point (prefer right hand)
+      const primaryPinch = worldRightPinch || worldLeftPinch;
+      const primaryStrength = worldRightPinch ? gestures.rightPinchStrength : gestures.leftPinchStrength;
+
+      // Brush params (could be exposed as props in future)
+      const CARVE_DEPTH = 0.015;   // How deep carve brush digs
+      const STAMP_DEPTH = 0.02;    // Imprint depth
+      const STAMP_RATE = 0.15;     // Seconds between stamps
+      const STAMP_DIST = 0.08;     // Min distance between stamps
+
+      if (primaryPinch && primaryStrength >= PINCH_HOLD_THRESHOLD) {
+        if (!refine.active) {
+          // Start refine stroke
+          refine.active = true;
+          refine.prevPos = { ...primaryPinch };
+        }
+
+        // Calculate stroke movement
+        const dx = primaryPinch.x - (refine.prevPos?.x ?? primaryPinch.x);
+        const dy = primaryPinch.y - (refine.prevPos?.y ?? primaryPinch.y);
+        const dz = primaryPinch.z - (refine.prevPos?.z ?? primaryPinch.z);
+        const moveDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        // Stroke direction (normalized)
+        const strokeDir = moveDist > 0.001
+          ? { x: dx / moveDist, y: dy / moveDist, z: dz / moveDist }
+          : { x: 0, y: 0, z: 1 };
+
+        // Plane normal for flatten (facing camera)
+        const planeNormal = { x: 0, y: 0, z: 1 };
+
+        // === SCRAPE MODE ===
+        if (refineMode === 'scrape') {
+          const MIN_STROKE_DIST = 0.01; // Only apply if there's movement
+          if (moveDist >= MIN_STROKE_DIST) {
+            if (refineBrush === 'smooth') {
+              // Smooth: Laplacian relaxation along stroke
+              applyScrape(sim, primaryPinch, strokeDir, moveDist);
+            } else if (refineBrush === 'carve') {
+              // Carve: dig a groove - scrape + push down into stroke
+              applyScrape(sim, primaryPinch, strokeDir, moveDist);
+              applyCarve(sim, primaryPinch, strokeDir, CARVE_DEPTH);
+            } else if (refineBrush === 'stamp') {
+              // Stamp: periodic imprints along stroke
+              const lastPos = refine.lastStampPos;
+              const stampDistOk = !lastPos || Math.sqrt(
+                (primaryPinch.x - lastPos.x) ** 2 +
+                (primaryPinch.y - lastPos.y) ** 2 +
+                (primaryPinch.z - lastPos.z) ** 2
+              ) >= STAMP_DIST;
+              const stampTimeOk = globalTime - refine.lastStampTime >= STAMP_RATE;
+
+              if (stampDistOk && stampTimeOk) {
+                applyStamp(sim, primaryPinch, strokeDir, STAMP_DEPTH);
+                refine.lastStampTime = globalTime;
+                refine.lastStampPos = { ...primaryPinch };
+              }
+            }
+          }
+        }
+        // === FLATTEN MODE ===
+        else if (refineMode === 'flatten') {
+          if (refineBrush === 'smooth') {
+            // Smooth flatten: gentle pressure toward plane
+            applyFlatten(sim, primaryPinch, planeNormal);
+          } else if (refineBrush === 'carve') {
+            // Carve flatten: push center in, raise edges
+            applyFlattenCarve(sim, primaryPinch, planeNormal, CARVE_DEPTH);
+          } else if (refineBrush === 'stamp') {
+            // Stamp flatten: strong imprint, rate-limited
+            const stampTimeOk = globalTime - refine.lastStampTime >= STAMP_RATE;
+            if (stampTimeOk) {
+              applyFlattenStamp(sim, primaryPinch, planeNormal, STAMP_DEPTH);
+              refine.lastStampTime = globalTime;
+              refine.lastStampPos = { ...primaryPinch };
+            }
+          }
+        }
+
+        refine.prevPos = { ...primaryPinch };
+      } else {
+        // Release
+        refine.active = false;
+        refine.prevPos = null;
+      }
+    }
+
+    // === GLOBAL INTERACTIONS (all tools) ===
+    // Grab gesture: squeeze the blob
     const grabStrength = Math.max(gestures.leftGrabStrength, gestures.rightGrabStrength);
     if (grabStrength > 0.2) {
       const squeezeScale = 1 - grabStrength * sculptStrength * 0.01;
       applySqueeze(sim, squeezeScale);
     }
 
-    // Two-hand stretch: scale blob along axis
+    // Two-hand stretch: scale blob along axis (enhanced in stretch mode)
     if (gestures.twoHandCenter && prev.twoHandDistance > 0) {
       const distDelta = gestures.twoHandDistance - prev.twoHandDistance;
       if (Math.abs(distDelta) > 0.001) {
-        // Stretch/squash
-        const stretchFactor = 1 + distDelta * sculptStrength * 0.5;
+        const stretchMultiplier = toolMode === 'stretch' ? 1.0 : 0.5;
+        const stretchFactor = 1 + distDelta * sculptStrength * stretchMultiplier;
         applySqueeze(sim, stretchFactor);
       }
     }
@@ -301,9 +491,35 @@ export function ClayParticleSystem({
     // Step simulation (pass global time for jitter)
     stepClay(sim, Math.min(delta, 0.05), globalTime);
 
-    // Get pinned particle indices for visual feedback
+    // Check and notify split status changes
+    const currentSplitStatus = isClaySplit(sim);
+    if (currentSplitStatus !== prevSplitStatusRef.current) {
+      prevSplitStatusRef.current = currentSplitStatus;
+      onSplitStatusChange?.(currentSplitStatus);
+    }
+
+    // Get pinned particle indices and sculpt states for visual feedback
     const leftPinnedIdx = getPinnedParticleLeft(sim);
     const rightPinnedIdx = getPinnedParticleRight(sim);
+    const leftSculptState = getSculptStateLeft(sim);
+    const rightSculptState = getSculptStateRight(sim);
+
+    // Build a map of neighbor weights for visual feedback
+    const neighborWeights = new Map<number, number>();
+    if (leftSculptState) {
+      for (let i = 0; i < leftSculptState.neighbors.length; i++) {
+        const idx = leftSculptState.neighbors[i];
+        const w = leftSculptState.weights[i];
+        neighborWeights.set(idx, Math.max(neighborWeights.get(idx) || 0, w));
+      }
+    }
+    if (rightSculptState) {
+      for (let i = 0; i < rightSculptState.neighbors.length; i++) {
+        const idx = rightSculptState.neighbors[i];
+        const w = rightSculptState.weights[i];
+        neighborWeights.set(idx, Math.max(neighborWeights.get(idx) || 0, w));
+      }
+    }
 
     // Update render positions
     const simPositions = getClayPositions(sim);
@@ -314,12 +530,17 @@ export function ClayParticleSystem({
       positions[i3 + 1] = simPositions[i3 + 1];
       positions[i3 + 2] = simPositions[i3 + 2];
 
-      // Visual feedback: slightly enlarge pinned particles
+      // Visual feedback: scale based on sculpt influence
       const isPinned = i === leftPinnedIdx || i === rightPinnedIdx;
+      const neighborWeight = neighborWeights.get(i) || 0;
       const baseScale = scales[i];
+
       if (isPinned) {
-        // Temporarily boost scale for visual feedback
+        // Grabbed particle: 30% larger
         geometry.attributes.aScale.array[i] = baseScale * 1.3;
+      } else if (neighborWeight > 0) {
+        // Influenced neighbors: subtle scale boost based on weight (up to 15%)
+        geometry.attributes.aScale.array[i] = baseScale * (1 + neighborWeight * 0.15);
       } else {
         geometry.attributes.aScale.array[i] = baseScale;
       }
