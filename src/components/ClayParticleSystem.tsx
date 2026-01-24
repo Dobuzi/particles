@@ -419,7 +419,8 @@ export function ClayParticleSystem({
               applyScrape(sim, primaryPinch, strokeDir, moveDist);
               applyCarve(sim, primaryPinch, strokeDir, CARVE_DEPTH);
             } else if (refineBrush === 'stamp') {
-              // Stamp: periodic imprints along stroke
+              // Stamp: periodic circular imprints along stroke
+              // Uses planeNormal (camera Z) for consistent press direction
               const lastPos = refine.lastStampPos;
               const stampDistOk = !lastPos || Math.sqrt(
                 (primaryPinch.x - lastPos.x) ** 2 +
@@ -429,7 +430,8 @@ export function ClayParticleSystem({
               const stampTimeOk = globalTime - refine.lastStampTime >= STAMP_RATE;
 
               if (stampDistOk && stampTimeOk) {
-                applyStamp(sim, primaryPinch, strokeDir, STAMP_DEPTH);
+                // Use planeNormal for consistent "press into screen" direction
+                applyStamp(sim, primaryPinch, planeNormal, STAMP_DEPTH);
                 refine.lastStampTime = globalTime;
                 refine.lastStampPos = { ...primaryPinch };
               }

@@ -35,7 +35,7 @@ const REFINE_MODE_INFO: Record<RefineMode, { label: string; description: string 
 const REFINE_BRUSH_INFO: Record<RefineBrush, { label: string; description: string }> = {
   smooth: { label: 'Smooth', description: 'Relax surface' },
   carve: { label: 'Carve', description: 'Create grooves' },
-  stamp: { label: 'Stamp', description: 'Imprint pattern' },
+  stamp: { label: 'Stamp', description: 'Circular press imprint' },
 };
 
 // Mode preset settings bundle

@@ -1000,18 +1000,30 @@ export function applyCarve(
   }
 }
 
-// Apply stamp effect: create a circular imprint at a point
-// Used by Refine tool with stamp brush for periodic imprints
+// Apply stamp effect: circular imprint with subtle raised ridge
+// Uses difference-of-Gaussians profile for premium "pressed seal" look
+// Art direction: single curated stamp style for visual consistency
 export function applyStamp(
   sim: ClaySimulation,
   toolPos: Vec3,
-  strokeDir: Vec3,      // Direction of stroke (used for orientation)
-  stampDepth: number    // How deep to stamp
+  pressNormal: Vec3,    // Direction to press (typically camera Z or palm normal)
+  stampDepth: number    // How deep to stamp (positive = indent)
 ): void {
   sim.sculpting = true;
 
   const { particles, restPositions, config } = sim;
   const { scrapeRadius, sculptMemoryRate } = config;
+
+  // Difference-of-Gaussians profile parameters
+  // Creates dimple at center with subtle raised ridge at edge
+  const SIGMA_INNER = 0.35;   // Inner dimple width (relative to radius)
+  const SIGMA_OUTER = 0.75;   // Outer ridge width
+  const RIDGE_RATIO = 0.2;    // Ridge height relative to dimple depth (subtle)
+
+  // Memory multiplier for stamps (higher = more permanent)
+  const STAMP_MEMORY_MULT = 2.0;
+  // Maximum memory rate per frame to prevent runaway drift
+  const MAX_MEMORY_RATE = 0.25;
 
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
@@ -1025,19 +1037,36 @@ export function applyStamp(
 
     if (dist >= scrapeRadius) continue;
 
-    // Stamp uses a bell-curve profile (Gaussian-like)
+    // Normalized distance
     const t = dist / scrapeRadius;
-    const bellCurve = Math.exp(-t * t * 4); // Sharper falloff for defined stamp edge
 
-    // Push particles inward along stroke direction (imprint)
-    const pushStrength = bellCurve * stampDepth;
+    // Difference of Gaussians profile:
+    // Inner Gaussian (negative = indent) - sharp falloff
+    const innerGauss = Math.exp(-(t / SIGMA_INNER) * (t / SIGMA_INNER));
+    // Outer Gaussian (positive = ridge) - broader falloff
+    const outerGauss = Math.exp(-(t / SIGMA_OUTER) * (t / SIGMA_OUTER));
 
-    p.position.x -= strokeDir.x * pushStrength;
-    p.position.y -= strokeDir.y * pushStrength;
-    p.position.z -= strokeDir.z * pushStrength;
+    // Combined profile: -dimple + ridge
+    // At center (t=0): profile ≈ -1 + 0.2 = -0.8 (indent)
+    // At t≈0.5: inner drops off, outer still present = slight positive (ridge)
+    // At edge (t=1): both near zero
+    const profile = -innerGauss + RIDGE_RATIO * outerGauss;
+
+    // Displacement along press normal
+    // Positive profile = push outward (ridge), negative = push inward (dimple)
+    const displacement = profile * stampDepth;
+
+    p.position.x += pressNormal.x * displacement;
+    p.position.y += pressNormal.y * displacement;
+    p.position.z += pressNormal.z * displacement;
 
     // Update rest position for permanent imprint
-    const memoryRate = sculptMemoryRate * bellCurve * 1.5; // Higher memory for stamps
+    // Use absolute profile value for memory (both dimple and ridge should persist)
+    const influence = Math.abs(profile);
+    const memoryRate = Math.min(
+      sculptMemoryRate * influence * STAMP_MEMORY_MULT,
+      MAX_MEMORY_RATE
+    );
     restPositions[i].x += (p.position.x - restPositions[i].x) * memoryRate;
     restPositions[i].y += (p.position.y - restPositions[i].y) * memoryRate;
     restPositions[i].z += (p.position.z - restPositions[i].z) * memoryRate;
@@ -1094,7 +1123,9 @@ export function applyFlattenCarve(
   }
 }
 
-// Apply stamp variant for flatten mode: strong circular imprint
+// Apply stamp for flatten mode: circular imprint with subtle raised ridge
+// Same visual language as applyStamp for consistency
+// Combines flatten projection with stamp indentation
 export function applyFlattenStamp(
   sim: ClaySimulation,
   planeOrigin: Vec3,
@@ -1105,6 +1136,13 @@ export function applyFlattenStamp(
 
   const { particles, restPositions, config } = sim;
   const { flattenRadius, flattenStrength, sculptMemoryRate } = config;
+
+  // Same DoG profile as applyStamp for visual consistency
+  const SIGMA_INNER = 0.35;
+  const SIGMA_OUTER = 0.75;
+  const RIDGE_RATIO = 0.2;
+  const STAMP_MEMORY_MULT = 2.0;
+  const MAX_MEMORY_RATE = 0.25;
 
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
@@ -1118,22 +1156,41 @@ export function applyFlattenStamp(
 
     if (dist >= flattenRadius) continue;
 
-    // Bell curve for stamp profile
+    // Normalized distance
     const t = dist / flattenRadius;
-    const bellCurve = Math.exp(-t * t * 4);
 
-    // Signed distance to plane
+    // Difference of Gaussians profile (same as applyStamp)
+    const innerGauss = Math.exp(-(t / SIGMA_INNER) * (t / SIGMA_INNER));
+    const outerGauss = Math.exp(-(t / SIGMA_OUTER) * (t / SIGMA_OUTER));
+    const profile = -innerGauss + RIDGE_RATIO * outerGauss;
+
+    // Signed distance to plane (for flatten component)
     const signedDist = dx * planeNormal.x + dy * planeNormal.y + dz * planeNormal.z;
 
-    // Strong flatten combined with stamp push
-    const combinedPush = bellCurve * (flattenStrength + stampDepth);
+    // Two effects:
+    // 1. Flatten: project toward plane (proportional to signed distance)
+    // 2. Stamp: add DoG profile displacement
 
-    p.position.x -= planeNormal.x * signedDist * combinedPush;
-    p.position.y -= planeNormal.y * signedDist * combinedPush;
-    p.position.z -= planeNormal.z * signedDist * combinedPush;
+    // Flatten effect with profile-based falloff (stronger at center)
+    const flattenInfluence = innerGauss * flattenStrength;
+    const flattenDisp = signedDist * flattenInfluence;
 
-    // Higher memory rate for permanent stamp
-    const memoryRate = sculptMemoryRate * bellCurve * 2.0;
+    // Stamp effect (DoG profile)
+    const stampDisp = profile * stampDepth;
+
+    // Combined displacement along normal
+    const totalDisp = flattenDisp + stampDisp;
+
+    p.position.x -= planeNormal.x * totalDisp;
+    p.position.y -= planeNormal.y * totalDisp;
+    p.position.z -= planeNormal.z * totalDisp;
+
+    // Update rest position for permanent imprint
+    const influence = Math.max(innerGauss, Math.abs(profile));
+    const memoryRate = Math.min(
+      sculptMemoryRate * influence * STAMP_MEMORY_MULT,
+      MAX_MEMORY_RATE
+    );
     restPositions[i].x += (p.position.x - restPositions[i].x) * memoryRate;
     restPositions[i].y += (p.position.y - restPositions[i].y) * memoryRate;
     restPositions[i].z += (p.position.z - restPositions[i].z) * memoryRate;
