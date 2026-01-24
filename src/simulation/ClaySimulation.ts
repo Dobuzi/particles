@@ -14,6 +14,7 @@ import {
 import { solveMinDistanceAll } from './Constraints';
 
 // Clay simulation configuration
+// See docs/art-direction-modes.md for mode-specific parameter recommendations
 export type ClayConfig = {
   // Physics
   timestep: number;
@@ -33,6 +34,10 @@ export type ClayConfig = {
   // Spacing
   minDistance: number;
   repulsionStrength: number;
+
+  // Jitter (organic life)
+  jitterAmplitude: number;     // Amplitude of coherent noise jitter [0, 0.01]
+  jitterSpeed: number;         // Speed of jitter animation [0.5, 2.0]
 };
 
 const DEFAULT_CLAY_CONFIG: ClayConfig = {
@@ -47,6 +52,15 @@ const DEFAULT_CLAY_CONFIG: ClayConfig = {
   sculptRadius: 0.8,          // Large sculpt neighborhood
   minDistance: 0.1,           // Larger spacing for bigger clay
   repulsionStrength: 0.45,
+  jitterAmplitude: 0.002,     // Subtle organic movement
+  jitterSpeed: 0.8,           // Moderate animation speed
+};
+
+// Pin constraint for pick-and-move
+export type PinConstraint = {
+  particleIndex: number;        // Index of the pinned particle
+  target: Vec3;                 // Target position to follow
+  stiffness: number;            // How strongly the particle follows [0, 1]
 };
 
 // Clay simulation state
@@ -59,6 +73,9 @@ export type ClaySimulation = {
   initialized: boolean;
   sculpting: boolean;           // True when actively being sculpted
   sculptCooldown: number;       // Frames since last sculpt
+  // Pick-and-move state (per-hand)
+  leftPinnedParticle: PinConstraint | null;
+  rightPinnedParticle: PinConstraint | null;
 };
 
 // Create clay simulation with particles in spherical arrangement
@@ -114,6 +131,8 @@ export function createClaySimulation(
     initialized: true,
     sculpting: false,
     sculptCooldown: 0,
+    leftPinnedParticle: null,
+    rightPinnedParticle: null,
   };
 }
 
@@ -244,14 +263,76 @@ function applyRestShapeConstraint(sim: ClaySimulation): void {
   }
 }
 
+// Apply pin constraint (for pick-and-move)
+function applyPinConstraint(sim: ClaySimulation, pin: PinConstraint | null): void {
+  if (!pin) return;
+
+  const particle = sim.particles[pin.particleIndex];
+  if (!particle) return;
+
+  // Move particle toward target with high stiffness
+  const dx = pin.target.x - particle.position.x;
+  const dy = pin.target.y - particle.position.y;
+  const dz = pin.target.z - particle.position.z;
+
+  particle.position.x += dx * pin.stiffness;
+  particle.position.y += dy * pin.stiffness;
+  particle.position.z += dz * pin.stiffness;
+}
+
+// Simple coherent noise using sine waves (cheaper than perlin)
+// Returns value in [-1, 1]
+function coherentNoise(seed: number, t: number, frequency: number): number {
+  const phase1 = seed * 1.618033988749895;
+  const phase2 = seed * 2.718281828459045;
+  const phase3 = seed * 3.141592653589793;
+  return (
+    Math.sin(t * frequency + phase1) * 0.5 +
+    Math.sin(t * frequency * 1.7 + phase2) * 0.3 +
+    Math.sin(t * frequency * 2.3 + phase3) * 0.2
+  );
+}
+
+// Apply organic jitter to particles
+function applyJitter(sim: ClaySimulation, globalTime: number): void {
+  const { particles, config, leftPinnedParticle, rightPinnedParticle } = sim;
+  const { jitterAmplitude, jitterSpeed } = config;
+
+  if (jitterAmplitude <= 0) return;
+
+  const t = globalTime * jitterSpeed;
+
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    if (p.pinned) continue;
+
+    // Reduce jitter for pinned particles (precise control)
+    const isPinned =
+      (leftPinnedParticle?.particleIndex === i) ||
+      (rightPinnedParticle?.particleIndex === i);
+    const amplitude = isPinned ? jitterAmplitude * 0.1 : jitterAmplitude;
+
+    // Use particle index as seed for deterministic noise per particle
+    const seed = i * 0.1;
+    const nx = coherentNoise(seed, t, 1.0) * amplitude;
+    const ny = coherentNoise(seed + 100, t, 1.1) * amplitude;
+    const nz = coherentNoise(seed + 200, t, 0.9) * amplitude * 0.5; // Less z jitter
+
+    p.position.x += nx;
+    p.position.y += ny;
+    p.position.z += nz;
+  }
+}
+
 // Step the clay simulation
-export function stepClay(sim: ClaySimulation, dt: number): void {
+export function stepClay(sim: ClaySimulation, dt: number, globalTime: number = 0): void {
   if (!sim.initialized) return;
 
   const { config, particles } = sim;
 
   // Track sculpting cooldown
-  if (sim.sculpting) {
+  const hasPin = sim.leftPinnedParticle || sim.rightPinnedParticle;
+  if (sim.sculpting || hasPin) {
     sim.sculptCooldown = 0;
     sim.sculpting = false; // Reset each frame, set by sculpt functions
   } else {
@@ -276,6 +357,10 @@ export function stepClay(sim: ClaySimulation, dt: number): void {
 
     // 3. Constraint solving
     for (let iter = 0; iter < config.substeps; iter++) {
+      // Pin constraints FIRST (highest priority)
+      applyPinConstraint(sim, sim.leftPinnedParticle);
+      applyPinConstraint(sim, sim.rightPinnedParticle);
+
       // Cohesion (keep in blob)
       applyCohesion(sim);
 
@@ -292,6 +377,9 @@ export function stepClay(sim: ClaySimulation, dt: number): void {
       applyCenterAnchor(sim);
     }
   }
+
+  // Apply organic jitter (after constraints, before rendering)
+  applyJitter(sim, globalTime);
 
   // Update rest shape gradually (deformation memory)
   updateRestShape(sim);
@@ -436,6 +524,103 @@ export function setClayCenter(sim: ClaySimulation, newCenter: Vec3): void {
     sim.restPositions[i].y += dy;
     sim.restPositions[i].z += dz;
   }
+}
+
+// === PICK-AND-MOVE FUNCTIONS ===
+
+// Find nearest particle to a point within radius
+export function findNearestParticle(
+  sim: ClaySimulation,
+  point: Vec3,
+  maxRadius: number
+): number | null {
+  const { particles } = sim;
+  let nearestIndex: number | null = null;
+  let nearestDistSq = maxRadius * maxRadius;
+
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i].position;
+    const dx = p.x - point.x;
+    const dy = p.y - point.y;
+    const dz = p.z - point.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+
+    if (distSq < nearestDistSq) {
+      nearestDistSq = distSq;
+      nearestIndex = i;
+    }
+  }
+
+  return nearestIndex;
+}
+
+// Pin a particle for pick-and-move (left hand)
+export function pinParticleLeft(
+  sim: ClaySimulation,
+  particleIndex: number,
+  target: Vec3,
+  stiffness: number = 0.8
+): void {
+  sim.leftPinnedParticle = {
+    particleIndex,
+    target: { ...target },
+    stiffness,
+  };
+  sim.sculpting = true;
+}
+
+// Pin a particle for pick-and-move (right hand)
+export function pinParticleRight(
+  sim: ClaySimulation,
+  particleIndex: number,
+  target: Vec3,
+  stiffness: number = 0.8
+): void {
+  sim.rightPinnedParticle = {
+    particleIndex,
+    target: { ...target },
+    stiffness,
+  };
+  sim.sculpting = true;
+}
+
+// Update pin target position (left hand)
+export function updatePinTargetLeft(sim: ClaySimulation, target: Vec3): void {
+  if (sim.leftPinnedParticle) {
+    sim.leftPinnedParticle.target.x = target.x;
+    sim.leftPinnedParticle.target.y = target.y;
+    sim.leftPinnedParticle.target.z = target.z;
+    sim.sculpting = true;
+  }
+}
+
+// Update pin target position (right hand)
+export function updatePinTargetRight(sim: ClaySimulation, target: Vec3): void {
+  if (sim.rightPinnedParticle) {
+    sim.rightPinnedParticle.target.x = target.x;
+    sim.rightPinnedParticle.target.y = target.y;
+    sim.rightPinnedParticle.target.z = target.z;
+    sim.sculpting = true;
+  }
+}
+
+// Release pinned particle (left hand)
+export function unpinParticleLeft(sim: ClaySimulation): void {
+  sim.leftPinnedParticle = null;
+}
+
+// Release pinned particle (right hand)
+export function unpinParticleRight(sim: ClaySimulation): void {
+  sim.rightPinnedParticle = null;
+}
+
+// Get pinned particle index (for visual feedback)
+export function getPinnedParticleLeft(sim: ClaySimulation): number | null {
+  return sim.leftPinnedParticle?.particleIndex ?? null;
+}
+
+export function getPinnedParticleRight(sim: ClaySimulation): number | null {
+  return sim.rightPinnedParticle?.particleIndex ?? null;
 }
 
 // Reset clay to initial spherical shape

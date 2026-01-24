@@ -15,6 +15,15 @@ import {
   applyAttraction,
   applySqueeze,
   resetClay,
+  findNearestParticle,
+  pinParticleLeft,
+  pinParticleRight,
+  updatePinTargetLeft,
+  updatePinTargetRight,
+  unpinParticleLeft,
+  unpinParticleRight,
+  getPinnedParticleLeft,
+  getPinnedParticleRight,
   type ClaySimulation,
 } from '../simulation/ClaySimulation';
 import { xorshift32 } from '../utils/math';
@@ -39,8 +48,13 @@ type ClayParticleSystemProps = {
   surfaceTension?: number;
   // Interaction
   sculptStrength?: number;
+  pickEnabled?: boolean;      // Enable pick-and-move (default true)
+  pickRadius?: number;        // Radius for particle selection
+  // Jitter (organic life)
+  jitterAmplitude?: number;   // Amplitude of coherent noise jitter
+  jitterSpeed?: number;       // Speed of jitter animation
   // Visuals
-  colorHue?: number;      // Base hue [0, 1]
+  colorHue?: number;          // Base hue [0, 1]
   particleSize?: number;
   glowIntensity?: number;
   // Expose simulation for connection lines
@@ -56,6 +70,10 @@ export function ClayParticleSystem({
   cohesionStrength = 0.4,
   surfaceTension = 0.15,
   sculptStrength = 0.5,
+  pickEnabled = true,
+  pickRadius = 0.4,
+  jitterAmplitude = 0.002,
+  jitterSpeed = 0.8,
   colorHue = 0.05,        // Terracotta (natural clay)
   particleSize = 0.35,
   glowIntensity = 0.4,
@@ -73,13 +91,15 @@ export function ClayParticleSystem({
         blobRadius,
         cohesionStrength,
         surfaceTension,
+        jitterAmplitude,
+        jitterSpeed,
       });
       onSimulationReady?.(simulationRef.current);
     } else if (!enabled && simulationRef.current) {
       simulationRef.current = null;
       onSimulationReady?.(null);
     }
-  }, [enabled, particleCount, blobRadius, cohesionStrength, surfaceTension, onSimulationReady]);
+  }, [enabled, particleCount, blobRadius, cohesionStrength, surfaceTension, jitterAmplitude, jitterSpeed, onSimulationReady]);
 
   // Update config when props change
   useEffect(() => {
@@ -88,9 +108,11 @@ export function ClayParticleSystem({
         blobRadius,
         cohesionStrength,
         surfaceTension,
+        jitterAmplitude,
+        jitterSpeed,
       });
     }
-  }, [blobRadius, cohesionStrength, surfaceTension]);
+  }, [blobRadius, cohesionStrength, surfaceTension, jitterAmplitude, jitterSpeed]);
 
   // Initialize particle buffers
   const { positions, colors, scales, noiseSeeds } = useMemo(() => {
@@ -156,6 +178,19 @@ export function ClayParticleSystem({
     twoHandDistance: 0,
   });
 
+  // Pick-and-move state: track if we're actively holding a pinch
+  const pickStateRef = useRef<{
+    leftHolding: boolean;
+    rightHolding: boolean;
+  }>({
+    leftHolding: false,
+    rightHolding: false,
+  });
+
+  // Pinch thresholds for pick-and-move
+  const PINCH_START_THRESHOLD = 0.6;   // Start picking when pinch is this strong
+  const PINCH_HOLD_THRESHOLD = 0.3;    // Keep holding until pinch drops below this
+
   useFrame(({ clock }, delta) => {
     if (paused || !enabled) return;
 
@@ -164,12 +199,14 @@ export function ClayParticleSystem({
     const sim = simulationRef.current;
     if (!geometry || !material || !sim) return;
 
-    const time = clock.getElapsedTime() * 1000;
+    const globalTime = clock.getElapsedTime();
+    const time = globalTime * 1000;
     const hands = handsRef.current;
 
     // Update gestures
     const gestures = updateGestures(hands);
     const prev = prevGestureRef.current;
+    const pick = pickStateRef.current;
 
     // Convert gesture points to world space
     const worldLeftPinch = gestures.leftPinchPoint
@@ -179,12 +216,61 @@ export function ClayParticleSystem({
       ? landmarkToWorld(gestures.rightPinchPoint, VOLUME)
       : null;
 
-    // Apply sculpt interactions
-    // Pinch: attract particles toward pinch point
-    if (worldLeftPinch && gestures.leftPinchStrength > 0.1) {
+    // === PICK-AND-MOVE LOGIC ===
+    if (pickEnabled) {
+      // Left hand pick-and-move
+      if (worldLeftPinch) {
+        if (!pick.leftHolding && gestures.leftPinchStrength >= PINCH_START_THRESHOLD) {
+          // Start picking: find nearest particle
+          const nearestIdx = findNearestParticle(sim, worldLeftPinch, pickRadius);
+          if (nearestIdx !== null) {
+            pinParticleLeft(sim, nearestIdx, worldLeftPinch);
+            pick.leftHolding = true;
+          }
+        } else if (pick.leftHolding && gestures.leftPinchStrength >= PINCH_HOLD_THRESHOLD) {
+          // Continue dragging: update pin target
+          updatePinTargetLeft(sim, worldLeftPinch);
+        } else if (pick.leftHolding && gestures.leftPinchStrength < PINCH_HOLD_THRESHOLD) {
+          // Release: unpin particle
+          unpinParticleLeft(sim);
+          pick.leftHolding = false;
+        }
+      } else if (pick.leftHolding) {
+        // Hand lost: release
+        unpinParticleLeft(sim);
+        pick.leftHolding = false;
+      }
+
+      // Right hand pick-and-move
+      if (worldRightPinch) {
+        if (!pick.rightHolding && gestures.rightPinchStrength >= PINCH_START_THRESHOLD) {
+          // Start picking: find nearest particle
+          const nearestIdx = findNearestParticle(sim, worldRightPinch, pickRadius);
+          if (nearestIdx !== null) {
+            pinParticleRight(sim, nearestIdx, worldRightPinch);
+            pick.rightHolding = true;
+          }
+        } else if (pick.rightHolding && gestures.rightPinchStrength >= PINCH_HOLD_THRESHOLD) {
+          // Continue dragging: update pin target
+          updatePinTargetRight(sim, worldRightPinch);
+        } else if (pick.rightHolding && gestures.rightPinchStrength < PINCH_HOLD_THRESHOLD) {
+          // Release: unpin particle
+          unpinParticleRight(sim);
+          pick.rightHolding = false;
+        }
+      } else if (pick.rightHolding) {
+        // Hand lost: release
+        unpinParticleRight(sim);
+        pick.rightHolding = false;
+      }
+    }
+
+    // === ATTRACTION SCULPTING (when not picking) ===
+    // Only apply attraction when NOT holding a pinned particle
+    if (worldLeftPinch && gestures.leftPinchStrength > 0.1 && !pick.leftHolding) {
       applyAttraction(sim, worldLeftPinch, blobRadius * 1.5, gestures.leftPinchStrength * sculptStrength * 0.03);
     }
-    if (worldRightPinch && gestures.rightPinchStrength > 0.1) {
+    if (worldRightPinch && gestures.rightPinchStrength > 0.1 && !pick.rightHolding) {
       applyAttraction(sim, worldRightPinch, blobRadius * 1.5, gestures.rightPinchStrength * sculptStrength * 0.03);
     }
 
@@ -212,30 +298,35 @@ export function ClayParticleSystem({
     prev.rightGrabStrength = gestures.rightGrabStrength;
     prev.twoHandDistance = gestures.twoHandDistance;
 
-    // Step simulation
-    stepClay(sim, Math.min(delta, 0.05));
+    // Step simulation (pass global time for jitter)
+    stepClay(sim, Math.min(delta, 0.05), globalTime);
+
+    // Get pinned particle indices for visual feedback
+    const leftPinnedIdx = getPinnedParticleLeft(sim);
+    const rightPinnedIdx = getPinnedParticleRight(sim);
 
     // Update render positions
     const simPositions = getClayPositions(sim);
     for (let i = 0; i < particleCount; i++) {
       const i3 = i * 3;
 
-      // Add slight noise for organic feel
-      let seed = noiseSeeds[i];
-      seed = xorshift32(seed);
-      const nx = ((seed & 0xffff) / 0xffff - 0.5) * 0.002;
-      seed = xorshift32(seed);
-      const ny = ((seed & 0xffff) / 0xffff - 0.5) * 0.002;
-      seed = xorshift32(seed);
-      const nz = ((seed & 0xffff) / 0xffff - 0.5) * 0.001;
-      noiseSeeds[i] = seed;
+      positions[i3] = simPositions[i3];
+      positions[i3 + 1] = simPositions[i3 + 1];
+      positions[i3 + 2] = simPositions[i3 + 2];
 
-      positions[i3] = simPositions[i3] + nx;
-      positions[i3 + 1] = simPositions[i3 + 1] + ny;
-      positions[i3 + 2] = simPositions[i3 + 2] + nz;
+      // Visual feedback: slightly enlarge pinned particles
+      const isPinned = i === leftPinnedIdx || i === rightPinnedIdx;
+      const baseScale = scales[i];
+      if (isPinned) {
+        // Temporarily boost scale for visual feedback
+        geometry.attributes.aScale.array[i] = baseScale * 1.3;
+      } else {
+        geometry.attributes.aScale.array[i] = baseScale;
+      }
     }
 
     geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.aScale.needsUpdate = true;
 
     // Update uniforms
     material.uniforms.uTime.value = time;
