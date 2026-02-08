@@ -2,7 +2,9 @@ import { useFrame } from '@react-three/fiber';
 import React, { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { flowVector } from '../utils/flowField';
-import type { ShapePoint } from '../hooks/useHandDrawing';
+import type { ShapePoint } from '../types';
+import { clamp, xorshift32 } from '../utils/math';
+import { hslToRgb } from '../utils/color';
 
 type ParticleFieldProps = {
   count: number;
@@ -22,9 +24,6 @@ type ParticleFieldProps = {
   handTargetsRef: React.MutableRefObject<{ data: Float32Array; count: number }>;
   shapeRef: React.MutableRefObject<ShapePoint[]>;
 };
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
 
 export function ParticleField({
   count,
@@ -79,31 +78,6 @@ export function ParticleField({
       colors: colorsArray,
     };
   }, [count, volume]);
-
-  const xorshift32 = (state: number) => {
-    let x = state | 0;
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-    return x >>> 0;
-  };
-
-  const hslToRgb = (h: number, s: number, l: number) => {
-    const c = (1 - Math.abs(2 * l - 1)) * s;
-    const hp = h * 6;
-    const x = c * (1 - Math.abs((hp % 2) - 1));
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    if (hp >= 0 && hp < 1) [r, g, b] = [c, x, 0];
-    else if (hp >= 1 && hp < 2) [r, g, b] = [x, c, 0];
-    else if (hp >= 2 && hp < 3) [r, g, b] = [0, c, x];
-    else if (hp >= 3 && hp < 4) [r, g, b] = [0, x, c];
-    else if (hp >= 4 && hp < 5) [r, g, b] = [x, 0, c];
-    else if (hp >= 5 && hp < 6) [r, g, b] = [c, 0, x];
-    const m = l - c / 2;
-    return [r + m, g + m, b + m];
-  };
 
   const updateColor = (i3: number, x: number, y: number, z: number, speed: number, flow: { x: number; y: number; z: number }) => {
     const intensity = Math.max(0.2, Math.min(1, colorIntensity));

@@ -9,6 +9,7 @@ import { ClayParticleSystem } from './components/ClayParticleSystem';
 import { HandConnectionLines, ClayConnectionLines } from './components/ConnectionLines';
 import { useHandTracking } from './hooks/useHandTracking';
 import { forceMerge, type ClaySimulation } from './simulation/ClaySimulation';
+import { loadSettings, saveSettings, clearSettings } from './hooks/usePersistedSettings';
 
 // Mobile detection and performance
 const isMobile = () => window.matchMedia('(max-width: 720px)').matches;
@@ -224,12 +225,15 @@ const MODE_PRESETS: Record<string, ModePreset> = {
 const MODE_ORDER = ['minimal', 'sculpt', 'flow', 'structure', 'expressive'] as const;
 
 export default function FingertipStreamApp() {
+  // Load persisted settings
+  const saved = loadSettings();
+
   // Mode & UI state
-  const [currentMode, setCurrentMode] = useState<string>('sculpt');
+  const [currentMode, setCurrentMode] = useState<string>(saved.currentMode);
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [paused, setPaused] = useState(false);
-  const [background, setBackground] = useState<'dark' | 'light'>('dark');
-  const [showPreview, setShowPreview] = useState(true);
+  const [paused, setPaused] = useState(saved.paused);
+  const [background, setBackground] = useState<'dark' | 'light'>(saved.background);
+  const [showPreview, setShowPreview] = useState(saved.showPreview);
   const [panelOpen, setPanelOpen] = useState(false);
 
   // Sculpt tool mode (gesture-free switching)
@@ -239,12 +243,12 @@ export default function FingertipStreamApp() {
   const [refineMode, setRefineMode] = useState<RefineMode>('scrape');
   const [refineBrush, setRefineBrush] = useState<RefineBrush>('smooth');
 
-  // All adjustable parameters (initialized from sculpt preset)
-  const defaultSettings = MODE_PRESETS.sculpt.settings;
+  // All adjustable parameters (initialized from saved or sculpt preset)
+  const defaultSettings = (MODE_PRESETS[saved.currentMode] ?? MODE_PRESETS.sculpt).settings;
   const [totalParticles, setTotalParticles] = useState(defaultSettings.totalParticles);
   const [handStreamBalance, setHandStreamBalance] = useState(defaultSettings.handStreamBalance);
   const [streamIntensity, setStreamIntensity] = useState(defaultSettings.streamIntensity);
-  const [showStreams, setShowStreams] = useState(defaultSettings.showStreams);
+  const [showStreams, setShowStreams] = useState(saved.showStreams);
   const [showLinks, setShowLinks] = useState(defaultSettings.showLinks);
   const [flowStrength, setFlowStrength] = useState(defaultSettings.flowStrength);
   const [noiseStrength, setNoiseStrength] = useState(defaultSettings.noiseStrength);
@@ -254,14 +258,14 @@ export default function FingertipStreamApp() {
   const [streamResponsiveness, setStreamResponsiveness] = useState(defaultSettings.streamResponsiveness);
   const [glowIntensity, setGlowIntensity] = useState(defaultSettings.glowIntensity);
   const [particleSize, setParticleSize] = useState(defaultSettings.particleSize);
-  const [showClay, setShowClay] = useState(defaultSettings.showClay);
+  const [showClay, setShowClay] = useState(saved.showClay);
   const [clayParticles, setClayParticles] = useState(defaultSettings.clayParticles);
   const [clayRadius, setClayRadius] = useState(defaultSettings.clayRadius);
   const [sculptStrength, setSculptStrength] = useState(defaultSettings.sculptStrength);
   const [sculptRadius, setSculptRadius] = useState(defaultSettings.sculptRadius);
   const [sculptMemoryRate, setSculptMemoryRate] = useState(defaultSettings.sculptMemoryRate);
-  const [showHandLines, setShowHandLines] = useState(defaultSettings.showHandLines);
-  const [showClayLines, setShowClayLines] = useState(defaultSettings.showClayLines);
+  const [showHandLines, setShowHandLines] = useState(saved.showHandLines);
+  const [showClayLines, setShowClayLines] = useState(saved.showClayLines);
   const [clayJitterAmplitude, setClayJitterAmplitude] = useState(defaultSettings.clayJitterAmplitude);
   const [clayJitterSpeed, setClayJitterSpeed] = useState(defaultSettings.clayJitterSpeed);
 
@@ -332,9 +336,71 @@ export default function FingertipStreamApp() {
     previewEnabled: showPreview,
   });
 
+  // Persist settings on change
+  useEffect(() => {
+    saveSettings({
+      currentMode,
+      background,
+      showPreview,
+      showClay,
+      showStreams,
+      showHandLines,
+      showClayLines,
+      paused,
+    });
+  }, [currentMode, background, showPreview, showClay, showStreams, showHandLines, showClayLines, paused]);
+
   useEffect(() => {
     document.body.classList.toggle('light', background === 'light');
   }, [background]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore when typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      switch (e.key) {
+        case ' ':
+          e.preventDefault();
+          setPaused((p) => !p);
+          break;
+        case 'c':
+          setShowPreview((p) => !p);
+          break;
+        case 'b':
+          setBackground((bg) => (bg === 'dark' ? 'light' : 'dark'));
+          break;
+        case 's':
+          setShowStreams((s) => !s);
+          break;
+        case 'l':
+          setShowHandLines((h) => !h);
+          break;
+        case 'k':
+          setShowClay((c) => !c);
+          break;
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5': {
+          const idx = parseInt(e.key) - 1;
+          if (idx >= 0 && idx < MODE_ORDER.length) {
+            applyMode(MODE_ORDER[idx]);
+          }
+          break;
+        }
+        case 'Escape':
+          setCustomizeOpen(false);
+          setPanelOpen(false);
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [applyMode]);
 
   return (
     <div className={`app ${background}`}>
@@ -392,7 +458,7 @@ export default function FingertipStreamApp() {
         />
       </Canvas>
 
-      <div className="hud">
+      <div className="hud" role="status" aria-live="polite" aria-label="Hand tracking status">
         <div className="title">Hand Particles</div>
         <div className="status">
           {state.status === 'loading'
@@ -431,13 +497,16 @@ export default function FingertipStreamApp() {
         {/* Mode Selector */}
         <div className="panel-section">
           <div className="panel-title">Mode</div>
-          <div className="mode-selector">
-            {MODE_ORDER.map((key) => (
+          <div className="mode-selector" role="radiogroup" aria-label="Visualization mode">
+            {MODE_ORDER.map((key, idx) => (
               <button
                 key={key}
                 className={`mode-btn ${currentMode === key ? 'active' : ''}`}
                 onClick={() => applyMode(key)}
-                title={MODE_PRESETS[key].description}
+                title={`${MODE_PRESETS[key].description} (${idx + 1})`}
+                role="radio"
+                aria-checked={currentMode === key}
+                aria-label={`${MODE_PRESETS[key].name} mode`}
               >
                 {MODE_PRESETS[key].name}
               </button>
@@ -547,17 +616,31 @@ export default function FingertipStreamApp() {
         <div className="panel-section">
           <div className="panel-title">Display</div>
           <div className="pill-row">
-            <button className="pill" onClick={() => setPaused((p) => !p)}>
+            <button className="pill" onClick={() => setPaused((p) => !p)} aria-label={paused ? 'Resume animation (Space)' : 'Pause animation (Space)'}>
               {paused ? 'Resume' : 'Pause'}
             </button>
             <button
               className="pill"
               onClick={() => setBackground((b) => (b === 'dark' ? 'light' : 'dark'))}
+              aria-label={`Switch to ${background === 'dark' ? 'light' : 'dark'} theme (B)`}
             >
               {background === 'dark' ? 'Light' : 'Dark'}
             </button>
-            <button className="pill" onClick={() => setShowPreview((p) => !p)}>
+            <button className="pill" onClick={() => setShowPreview((p) => !p)} aria-label={showPreview ? 'Hide camera preview (C)' : 'Show camera preview (C)'}>
               {showPreview ? 'Hide Cam' : 'Show Cam'}
+            </button>
+            <button
+              className="pill"
+              onClick={() => {
+                clearSettings();
+                applyMode('sculpt');
+                setBackground('dark');
+                setShowPreview(true);
+                setPaused(false);
+              }}
+              aria-label="Reset all settings to defaults"
+            >
+              Reset
             </button>
           </div>
         </div>
@@ -574,9 +657,9 @@ export default function FingertipStreamApp() {
         </div>
       </div>
 
-      <div className={`preview ${showPreview ? 'show' : 'hide'}`}>
+      <div className={`preview ${showPreview ? 'show' : 'hide'}`} aria-label="Camera preview">
         <div className="preview-inner">
-          <canvas ref={previewCanvasRef} width={240} height={135} />
+          <canvas ref={previewCanvasRef} width={240} height={135} aria-label="Webcam hand tracking preview" />
           <div className="preview-label">
             <span
               className={
@@ -602,11 +685,11 @@ export default function FingertipStreamApp() {
 
       {/* Customize Popup */}
       {customizeOpen && (
-        <div className="customize-overlay" onClick={() => setCustomizeOpen(false)}>
+        <div className="customize-overlay" onClick={() => setCustomizeOpen(false)} role="dialog" aria-modal="true" aria-label="Customize settings">
           <div className="customize-popup" onClick={(e) => e.stopPropagation()}>
             <div className="customize-header">
               <span>Customize Settings</span>
-              <button className="close-btn" onClick={() => setCustomizeOpen(false)}>×</button>
+              <button className="close-btn" onClick={() => setCustomizeOpen(false)} aria-label="Close settings">×</button>
             </div>
             <div className="customize-content">
               {/* Particles Section */}

@@ -8,6 +8,12 @@ import type { FingertipPair, Vec3 } from '../types';
 import { flowVector } from '../utils/flowField';
 import { lerp, vec3Lerp, xorshift32 } from '../utils/math';
 import { computeStreamColor } from '../utils/color';
+import {
+  VOLUME,
+  STREAM_COUNT,
+  REPULSION_STRENGTH,
+  REPULSION_RANGE,
+} from '../constants';
 
 type ParticleStreamsProps = {
   pairsRef: React.MutableRefObject<FingertipPair[]>;
@@ -17,14 +23,6 @@ type ParticleStreamsProps = {
   colorIntensity: number;
   paused: boolean;
 };
-
-const STREAM_COUNT = 5; // 5 finger pairs
-const VOLUME = 2.6; // World space bounds for depth normalization
-
-// Spacing constants for granular particle feel
-const MIN_PARTICLE_DISTANCE = 0.08; // Minimum distance between particles
-const REPULSION_STRENGTH = 0.015; // Soft repulsion force
-const REPULSION_RANGE = 0.15; // Range within which repulsion applies
 
 // Compute catenary-like curve between two points (sag in the middle)
 const catenaryLerp = (a: Vec3, b: Vec3, t: number, sag: number): Vec3 => {
