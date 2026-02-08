@@ -3,6 +3,14 @@
 
 import { useRef, useCallback } from 'react';
 import type { Vec3, HandInfo } from '../types';
+import { vec3Distance, vec3Normalize, vec3Sub } from '../utils/math';
+import {
+  LANDMARK,
+  PINCH_THRESHOLD,
+  PINCH_RELEASE,
+  GRAB_THRESHOLD,
+  GRAB_RELEASE,
+} from '../constants';
 
 // Gesture state
 export type GestureState = {
@@ -28,32 +36,6 @@ export type GestureState = {
   twoHandAxis: Vec3 | null;      // Normalized direction between hands
 };
 
-// Landmark indices
-const THUMB_TIP = 4;
-const INDEX_TIP = 8;
-const MIDDLE_TIP = 12;
-const RING_TIP = 16;
-const PINKY_TIP = 20;
-const WRIST = 0;
-const INDEX_MCP = 5;   // Index finger base
-const MIDDLE_MCP = 9;
-const RING_MCP = 13;
-const PINKY_MCP = 17;
-
-// Thresholds (in normalized landmark space)
-const PINCH_THRESHOLD = 0.08;      // Thumb-index distance for pinch
-const PINCH_RELEASE = 0.12;        // Hysteresis for release
-const GRAB_THRESHOLD = 0.15;       // Fingertip-to-palm distance for grab
-const GRAB_RELEASE = 0.20;
-
-// Calculate distance between two Vec3 points
-function distance(a: Vec3, b: Vec3): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const dz = b.z - a.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
 // Calculate midpoint between two Vec3 points
 function midpoint(a: Vec3, b: Vec3): Vec3 {
   return {
@@ -63,16 +45,15 @@ function midpoint(a: Vec3, b: Vec3): Vec3 {
   };
 }
 
-// Normalize a vector
-function normalize(v: Vec3): Vec3 {
-  const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-  if (len < 0.0001) return { x: 0, y: 0, z: 0 };
-  return { x: v.x / len, y: v.y / len, z: v.z / len };
-}
-
 // Calculate palm center from MCP points
 function palmCenter(landmarks: Vec3[]): Vec3 {
-  const points = [landmarks[WRIST], landmarks[INDEX_MCP], landmarks[MIDDLE_MCP], landmarks[RING_MCP], landmarks[PINKY_MCP]];
+  const points = [
+    landmarks[LANDMARK.WRIST],
+    landmarks[LANDMARK.INDEX_MCP],
+    landmarks[LANDMARK.MIDDLE_MCP],
+    landmarks[LANDMARK.RING_MCP],
+    landmarks[LANDMARK.PINKY_MCP],
+  ];
   let x = 0, y = 0, z = 0;
   for (const p of points) {
     x += p.x;
@@ -87,9 +68,9 @@ function detectPinch(
   landmarks: Vec3[],
   prevPinch: boolean
 ): { isPinching: boolean; point: Vec3 | null; strength: number } {
-  const thumbTip = landmarks[THUMB_TIP];
-  const indexTip = landmarks[INDEX_TIP];
-  const dist = distance(thumbTip, indexTip);
+  const thumbTip = landmarks[LANDMARK.THUMB_TIP];
+  const indexTip = landmarks[LANDMARK.INDEX_TIP];
+  const dist = vec3Distance(thumbTip, indexTip);
 
   // Hysteresis
   const threshold = prevPinch ? PINCH_RELEASE : PINCH_THRESHOLD;
@@ -112,16 +93,16 @@ function detectGrab(
 ): { isGrabbing: boolean; center: Vec3 | null; strength: number } {
   const palm = palmCenter(landmarks);
   const fingertips = [
-    landmarks[INDEX_TIP],
-    landmarks[MIDDLE_TIP],
-    landmarks[RING_TIP],
-    landmarks[PINKY_TIP],
+    landmarks[LANDMARK.INDEX_TIP],
+    landmarks[LANDMARK.MIDDLE_TIP],
+    landmarks[LANDMARK.RING_TIP],
+    landmarks[LANDMARK.PINKY_TIP],
   ];
 
   // Average distance of fingertips to palm
   let totalDist = 0;
   for (const tip of fingertips) {
-    totalDist += distance(tip, palm);
+    totalDist += vec3Distance(tip, palm);
   }
   const avgDist = totalDist / fingertips.length;
 
@@ -215,13 +196,9 @@ export function useGestures() {
       const leftCenter = palmCenter(leftHand.landmarks);
       const rightCenter = palmCenter(rightHand.landmarks);
 
-      state.twoHandDistance = distance(leftCenter, rightCenter);
+      state.twoHandDistance = vec3Distance(leftCenter, rightCenter);
       state.twoHandCenter = midpoint(leftCenter, rightCenter);
-      state.twoHandAxis = normalize({
-        x: rightCenter.x - leftCenter.x,
-        y: rightCenter.y - leftCenter.y,
-        z: rightCenter.z - leftCenter.z,
-      });
+      state.twoHandAxis = vec3Normalize(vec3Sub(rightCenter, leftCenter));
     } else {
       state.twoHandDistance = 0;
       state.twoHandCenter = null;

@@ -6,18 +6,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import type { Vec3, HandInfo, Handedness } from '../types';
 import { vec3Lerp } from '../utils/math';
-
-const FRAME_SKIP = 2; // Process every N frames
-const SMOOTHING_ALPHA = 0.4;
-
-const LANDMARK_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
-  [0, 5], [5, 6], [6, 7], [7, 8],       // Index
-  [5, 9], [9, 10], [10, 11], [11, 12],  // Middle
-  [9, 13], [13, 14], [14, 15], [15, 16], // Ring
-  [13, 17], [17, 18], [18, 19], [19, 20], // Pinky
-  [0, 17],                               // Palm
-];
+import { HAND_TRACKING_FRAME_SKIP, SMOOTHING_ALPHA, LANDMARK_CONNECTIONS } from '../constants';
 
 export type HandTrackingState = {
   status: 'loading' | 'ready' | 'tracking' | 'denied' | 'error';
@@ -51,6 +40,10 @@ export function useHandTracking({
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number | null>(null);
   const frameCountRef = useRef(0);
+
+  // Adaptive frame skip: adjusts based on measured FPS
+  const adaptiveSkipRef = useRef(HAND_TRACKING_FRAME_SKIP);
+  const fpsHistoryRef = useRef<number[]>([]);
 
   // Smoothed landmarks for stability
   const smoothedLeftRef = useRef<Vec3[] | null>(null);
@@ -165,7 +158,7 @@ export function useHandTracking({
           if (!mounted || !landmarkerRef.current || !videoRef.current) return;
 
           frameCountRef.current += 1;
-          if (frameCountRef.current % FRAME_SKIP !== 0) {
+          if (frameCountRef.current % adaptiveSkipRef.current !== 0) {
             rafRef.current = requestAnimationFrame(tick);
             return;
           }
@@ -179,7 +172,7 @@ export function useHandTracking({
             return;
           }
 
-          // Calculate FPS
+          // Calculate FPS and adapt frame skip
           if (lastFrameRef.current) {
             const delta = now - lastFrameRef.current;
             const fps = delta > 0 ? 1000 / delta : 0;
@@ -187,6 +180,18 @@ export function useHandTracking({
               ...s,
               fps: s.fps ? s.fps * 0.8 + fps * 0.2 : fps,
             }));
+
+            // Adaptive frame skip: increase skip if FPS drops, decrease if FPS is high
+            fpsHistoryRef.current.push(fps);
+            if (fpsHistoryRef.current.length > 30) fpsHistoryRef.current.shift();
+            if (fpsHistoryRef.current.length >= 10) {
+              const avgFps = fpsHistoryRef.current.reduce((a, b) => a + b, 0) / fpsHistoryRef.current.length;
+              if (avgFps < 20 && adaptiveSkipRef.current < 5) {
+                adaptiveSkipRef.current += 1;
+              } else if (avgFps > 40 && adaptiveSkipRef.current > 1) {
+                adaptiveSkipRef.current -= 1;
+              }
+            }
           }
           lastFrameRef.current = now;
 
@@ -257,8 +262,16 @@ export function useHandTracking({
         rafRef.current = requestAnimationFrame(tick);
       } catch (error) {
         if (!mounted) return;
-        console.error('Hand tracking error:', error);
-        setState((s) => ({ ...s, status: 'denied' }));
+        console.error('Hand tracking setup error:', error);
+        const isDenied =
+          error instanceof DOMException &&
+          (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError');
+        setState((s) => ({
+          ...s,
+          status: isDenied ? 'denied' : 'error',
+          hasHand: false,
+          hasTwoHands: false,
+        }));
       }
     };
 

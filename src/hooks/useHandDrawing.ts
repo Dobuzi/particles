@@ -1,75 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
-
-export type ShapePoint = {
-  x: number;
-  y: number;
-  z: number;
-  tx: number;
-  ty: number;
-  tz: number;
-  timestamp: number;
-};
-
-export type HandInfo = {
-  handedness: 'Left' | 'Right' | 'Unknown';
-  landmarks: Array<{ x: number; y: number; z: number }>;
-  confidence?: number;
-};
-
-type HandState = {
-  status: 'loading' | 'ready' | 'tracking' | 'denied' | 'error';
-  message: string;
-  isDrawing: boolean;
-  points: ShapePoint[];
-  hasHand: boolean;
-  hasTwoHands: boolean;
-  fps: number | null;
-  hands: HandInfo[];
-};
-
-type HandTargetCloud = {
-  data: Float32Array;
-  count: number;
-};
-
-const MAX_POINTS = 400;
-const MIN_POINT_DISTANCE = 0.04;
-const PINCH_DISTANCE = 0.04;
-const FRAME_SKIP = 3;
-const LANDMARK_CONNECTIONS = [
-  [0, 1],
-  [1, 2],
-  [2, 3],
-  [3, 4],
-  [0, 5],
-  [5, 6],
-  [6, 7],
-  [7, 8],
-  [5, 9],
-  [9, 10],
-  [10, 11],
-  [11, 12],
-  [9, 13],
-  [13, 14],
-  [14, 15],
-  [15, 16],
-  [13, 17],
-  [17, 18],
-  [18, 19],
-  [19, 20],
-  [0, 17],
-];
-
-const HAND_CHAINS = [
-  [0, 1, 2, 3, 4],
-  [0, 5, 6, 7, 8],
-  [0, 9, 10, 11, 12],
-  [0, 13, 14, 15, 16],
-  [0, 17, 18, 19, 20],
-];
-
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+import type { ShapePoint, HandInfo, HandState, HandTargetCloud } from '../types';
+import { lerp } from '../utils/math';
+import {
+  HAND_DRAWING_FRAME_SKIP,
+  PINCH_DISTANCE,
+  MIN_POINT_DISTANCE,
+  MAX_SHAPE_POINTS,
+  LANDMARK_CONNECTIONS,
+  HAND_CHAINS,
+  SMOOTHING_ALPHA,
+} from '../constants';
 
 const smoothLandmarks = (
   previous: Array<{ x: number; y: number; z: number }> | null,
@@ -273,7 +214,7 @@ export function useHandDrawing({
         const tick = () => {
           if (!mounted || !landmarkerRef.current || !videoRef.current) return;
           frameCount += 1;
-          if (frameCount % FRAME_SKIP === 0) {
+          if (frameCount % HAND_DRAWING_FRAME_SKIP === 0) {
             const now = performance.now();
             let result;
             try {
@@ -355,10 +296,10 @@ export function useHandDrawing({
             }
 
             const leftSmoothed = leftLandmarks
-              ? smoothLandmarks(previousHandsRef.current.left, leftLandmarks, 0.35)
+              ? smoothLandmarks(previousHandsRef.current.left, leftLandmarks, SMOOTHING_ALPHA)
               : null;
             const rightSmoothed = rightLandmarks
-              ? smoothLandmarks(previousHandsRef.current.right, rightLandmarks, 0.35)
+              ? smoothLandmarks(previousHandsRef.current.right, rightLandmarks, SMOOTHING_ALPHA)
               : null;
 
             previousHandsRef.current.left = leftSmoothed;
@@ -472,7 +413,7 @@ export function useHandDrawing({
                     tz: tangent.z / mag,
                     timestamp: performance.now(),
                   };
-                  shapeRef.current = [...shapeRef.current, point].slice(-MAX_POINTS);
+                  shapeRef.current = [...shapeRef.current, point].slice(-MAX_SHAPE_POINTS);
                   setState((prevState) => ({
                     ...prevState,
                     isDrawing: true,
@@ -518,12 +459,19 @@ export function useHandDrawing({
         rafRef.current = requestAnimationFrame(tick);
       } catch (error) {
         if (!mounted) return;
+        console.error('Hand drawing setup error:', error);
+        const isDenied =
+          error instanceof DOMException &&
+          (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError');
         setState((prev) => ({
           ...prev,
-          status: 'denied',
-          message: 'Camera access denied',
+          status: isDenied ? 'denied' : 'error',
+          message: isDenied
+            ? 'Camera access denied'
+            : error instanceof Error
+            ? `Setup failed: ${error.message}`
+            : 'Hand tracking setup failed',
         }));
-        console.error(error);
       }
     };
 

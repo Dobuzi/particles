@@ -18,17 +18,6 @@ export type HandInfo = {
   confidence?: number;
 };
 
-export type HandState = {
-  status: 'loading' | 'ready' | 'tracking' | 'denied' | 'error';
-  message: string;
-  isDrawing: boolean;
-  points: ShapePoint[];
-  hasHand: boolean;
-  hasTwoHands: boolean;
-  fps: number | null;
-  hands: HandInfo[];
-};
-
 // === Shape/Drawing Types ===
 
 export type ShapePoint = {
@@ -123,6 +112,19 @@ export type UnifiedParticleAssignment =
   | (ParticleAssignment & { type: 'bone' })
   | MeshParticleAssignment
   | ChainParticleAssignment;
+
+// === Hand State Types (used by useHandDrawing) ===
+
+export type HandState = {
+  status: 'loading' | 'ready' | 'tracking' | 'denied' | 'error';
+  message: string;
+  isDrawing: boolean;
+  points: ShapePoint[];
+  hasHand: boolean;
+  hasTwoHands: boolean;
+  fps: number | null;
+  hands: HandInfo[];
+};
 
 // === Configuration Types ===
 

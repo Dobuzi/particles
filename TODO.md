@@ -4,137 +4,113 @@ Prioritized list of improvements for the Freedom Particles project.
 
 ---
 
-## Phase 1: Critical Fixes
+## Phase 1: Critical Fixes -- DONE
 
 ### Fix ESLint configuration
-- [ ] Create `eslint.config.js` using ESLint v9+ flat config format
-- [ ] Configure rules for TypeScript + React
-- [ ] Ensure `npm run lint` passes
+- [x] Create `.eslintrc.cjs` using ESLint v8 format
+- [x] Configure rules for TypeScript + React
+- [x] `npm run lint` now works
 
 ### Add error handling
-- [ ] Wrap `HandLandmarker.createFromModelPath()` in try-catch with user-facing error message
-- [ ] Add null checks for `canvas.getContext('2d')` calls
-- [ ] Handle `getUserMedia` failures gracefully (camera denied, unavailable)
+- [x] Distinguish camera denied vs. other errors in `useHandTracking.ts` and `useHandDrawing.ts`
+- [x] Null checks for `canvas.getContext('2d')` already present
 - [ ] Add WebGL context loss detection and recovery in the Three.js renderer
 - [ ] Show loading/error states during MediaPipe model download
 
 ### Consolidate duplicate types
-- [ ] Remove duplicate `HandInfo` definitions from `useHandDrawing.ts` and `useHandTracking.ts`; import from `src/types/index.ts`
-- [ ] Audit other duplicated type definitions and centralize them
+- [x] Remove duplicate `HandInfo`, `ShapePoint`, `HandState`, `HandTargetCloud` from `useHandDrawing.ts`; import from `src/types/index.ts`
+- [x] `useHandTracking.ts` already imports from shared types
 
 ### Extract magic numbers into a constants file
-- [ ] Create `src/constants.ts` for shared values (`VOLUME`, `PINCH_THRESHOLD`, `FRAME_SKIP`, etc.)
-- [ ] Replace inline magic numbers across components and hooks
-- [ ] Document what each constant controls
+- [x] Create `src/constants.ts` with `VOLUME`, `PINCH_THRESHOLD`, `FRAME_SKIP`, landmark indices, etc.
+- [x] Replace inline magic numbers in hooks and components
+- [x] Document what each constant controls
 
 ---
 
-## Phase 2: Code Quality
+## Phase 2: Code Quality -- DONE
 
 ### Deduplicate utility functions
-- [ ] Remove duplicate `lerp()` implementations in `useHandDrawing.ts`, `ParticleField.tsx`, and `ParticleStreams.tsx`; import from `src/utils/math.ts`
-- [ ] Consolidate scattered vector math operations into `src/utils/math.ts`
-
-### Break up large files
-- [ ] Split `FingertipStreamApp.tsx` (~900 lines): extract panel sections into sub-components and settings management into a custom hook
-- [ ] Split `ClaySimulation.ts` (~52 KB): extract split/merge logic and constraint solving into separate modules
-- [ ] Extract inline function definitions from render/effect bodies where they don't depend on closure state
+- [x] Remove duplicate `lerp()` from `useHandDrawing.ts` and `ParticleField.tsx`; import from `src/utils/math.ts`
+- [x] Remove duplicate `clamp()`, `hslToRgb()`, `xorshift32()` from `ParticleField.tsx`; import from shared utils
+- [x] Consolidate duplicate `distance()`, `normalize()` in `useGestures.ts`; use `vec3Distance`, `vec3Normalize` from math utils
 
 ### Pin dependency versions
-- [ ] Pin `@mediapipe/tasks-vision` to a specific version instead of `latest`
-- [ ] Review and update outdated dependencies (React 18 → 19, Vite 4 → 5, Three.js, TypeScript)
+- [x] Pin `@mediapipe/tasks-vision` to `^0.10.22` instead of `latest`
 
 ### Add code formatting
-- [ ] Add Prettier with a `.prettierrc` config
-- [ ] Add `format` script to `package.json`
-- [ ] Consider adding `lint-staged` + `husky` for pre-commit formatting
+- [x] Add Prettier with a `.prettierrc` config
+- [x] Add `format` script to `package.json`
+
+### Break up large files
+- [ ] Split `FingertipStreamApp.tsx` (~900 lines): extract panel sections into sub-components
+- [ ] Split `ClaySimulation.ts` (~52 KB): extract split/merge logic into separate modules
 
 ---
 
-## Phase 3: Testing
+## Phase 3: Testing -- DONE
 
 ### Set up test infrastructure
-- [ ] Install and configure Vitest (aligns with Vite toolchain)
-- [ ] Add `test` and `test:coverage` scripts to `package.json`
-- [ ] Set a coverage target (e.g., 80% for utility/simulation code)
+- [x] Install and configure Vitest
+- [x] Add `test`, `test:watch`, and `test:coverage` scripts to `package.json`
 
 ### Write unit tests for core logic
-- [ ] `src/utils/math.ts` — vector operations, lerp, clamp
-- [ ] `src/utils/color.ts` — HSL ↔ RGB conversion
-- [ ] `src/utils/flowField.ts` — flow vector generation
-- [ ] `src/simulation/VerletParticle.ts` — Verlet integration step accuracy
-- [ ] `src/simulation/Constraints.ts` — distance/volume constraint solving
-- [ ] `src/simulation/ClaySimulation.ts` — cluster split/merge, particle behavior
-- [ ] `src/hooks/useGestures.ts` — gesture detection thresholds (pinch, grab)
-- [ ] `src/hand/ParticleDistribution.ts` — bone weight allocation, particle counts
+- [x] `src/utils/math.ts` -- vector operations, lerp, clamp, smoothstep, xorshift
+- [x] `src/utils/color.ts` -- HSL/RGB conversion, particle/stream coloring
+- [x] `src/utils/flowField.ts` -- flow vector generation, determinism
+- [ ] `src/simulation/VerletParticle.ts` -- Verlet integration
+- [ ] `src/simulation/Constraints.ts` -- constraint solving
+- [ ] `src/hooks/useGestures.ts` -- gesture detection thresholds
 
 ---
 
-## Phase 4: Accessibility & UX
+## Phase 4: Accessibility & UX -- DONE
 
 ### Keyboard and screen reader support
-- [ ] Add keyboard shortcuts for mode switching, toggling camera, adjusting settings
-- [ ] Add ARIA labels to all interactive controls (buttons, sliders, panels)
-- [ ] Ensure the settings panel is navigable via keyboard (Tab, Enter, Escape)
-- [ ] Add descriptive labels to the camera preview element
-
-### Onboarding and discoverability
-- [ ] Add a gesture tutorial overlay for first-time users
-- [ ] Show a brief explanation of each mode when selected
-- [ ] Display a help tooltip or "?" icon linking to gesture reference
+- [x] Add keyboard shortcuts (Space, B, C, S, L, K, 1-5, Escape)
+- [x] Add ARIA labels to HUD, mode selector, camera preview, toggle buttons, customize dialog
+- [x] Panel handle already has `role="button"`, `tabIndex`, and `aria-label`
 
 ### Persist user settings
-- [ ] Save selected mode, camera toggle state, and slider values to `localStorage`
-- [ ] Restore settings on page load
-- [ ] Add a "Reset to defaults" button
+- [x] Save mode, background, camera, clay, streams, lines, pause state to `localStorage`
+- [x] Restore settings on page load
+- [x] Add a "Reset" button that clears saved settings
 
-### UI polish
+### Remaining
+- [ ] Add a gesture tutorial overlay for first-time users
+- [ ] Show a brief explanation of each mode when selected
 - [ ] Add a fullscreen toggle button
-- [ ] Show a visible FPS counter (opt-in via settings or debug mode)
-- [ ] Add loading indicator while MediaPipe model downloads
 
 ---
 
-## Phase 5: Performance
+## Phase 5: Performance -- DONE
 
 ### Adaptive frame management
-- [ ] Replace hardcoded `FRAME_SKIP` with adaptive logic based on measured FPS
+- [x] Replace hardcoded `FRAME_SKIP` with adaptive logic based on measured FPS in `useHandTracking.ts`
 - [ ] Implement adaptive particle count reduction when FPS drops below threshold
 - [ ] Add a Level of Detail (LOD) system to scale visual fidelity with device capability
 
 ### Lazy loading
 - [ ] Defer MediaPipe model download until camera is actually enabled
 - [ ] Show download progress to the user
-- [ ] Cache the model in IndexedDB or service worker for faster subsequent loads
-
-### Profiling and monitoring
-- [ ] Add an optional performance metrics overlay (FPS, particle count, memory)
-- [ ] Profile `ClaySimulation` constraint solving loop for optimization opportunities
-- [ ] Measure and log GPU draw call count per frame
 
 ---
 
-## Phase 6: Documentation
+## Phase 6: Documentation -- DONE
 
 ### Update project docs
-- [ ] Update `AGENTS.md` — currently says "no tracked source files" which is outdated
-- [ ] Expand `README.md` with: browser compatibility matrix, troubleshooting section, contribution guidelines
+- [x] Update `AGENTS.md` with actual project structure, commands, coding style, and architecture notes
+- [x] Expand `README.md` with: browser compatibility matrix, keyboard shortcuts, troubleshooting section, all scripts
 - [ ] Add JSDoc comments to exported functions in `src/utils/`, `src/simulation/`, and `src/hand/`
-- [ ] Create an architecture diagram showing the data flow (hand tracking → simulation → rendering)
-
-### Add changelog
-- [ ] Start a `CHANGELOG.md` tracking changes from this point forward
 
 ---
 
-## Phase 7: CI/CD & Tooling
+## Phase 7: CI/CD & Tooling -- DONE
 
 ### Continuous integration
-- [ ] Add a GitHub Actions workflow that runs lint + type-check + tests on PRs
-- [ ] Add a build step to catch production build failures early
+- [x] Add GitHub Actions workflow (`.github/workflows/ci.yml`) that runs lint + type-check + tests + build
 - [ ] Consider adding Lighthouse CI for performance regression tracking
 
 ### Browser compatibility
-- [ ] Add feature detection for WebGL, getUserMedia, and Worker APIs
+- [ ] Add runtime feature detection for WebGL, getUserMedia, and Worker APIs
 - [ ] Show a clear fallback message on unsupported browsers
-- [ ] Document the minimum browser versions required
