@@ -8,7 +8,6 @@ import {
   createParticle,
   integrate,
   applyTargetConstraint,
-  setTarget,
   teleport,
 } from './VerletParticle';
 import { solveMinDistanceAll } from './Constraints';
@@ -319,7 +318,7 @@ function updateRestShape(sim: ClaySimulation): void {
 
 // Apply soft pull toward rest positions (shape memory)
 function applyRestShapeConstraint(sim: ClaySimulation): void {
-  const { particles, restPositions, config } = sim;
+  const { particles, restPositions } = sim;
 
   // Very gentle pull toward rest position (allows plastic deformation)
   const pullStrength = 0.02;
@@ -1222,9 +1221,6 @@ export function checkAndApplySplit(
   if (sim.isSplit) return false;
 
   // Perform split: divide particles based on which grab point is closer
-  const leftIdx = sim.leftPinnedParticle.particleIndex;
-  const rightIdx = sim.rightPinnedParticle.particleIndex;
-
   // Create a separating plane between the two grab points
   const midpoint = {
     x: (leftPos.x + rightPos.x) / 2,

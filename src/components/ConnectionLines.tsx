@@ -4,7 +4,7 @@
 // Clay: nearest neighbor connections
 
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Vec3, HandInfo } from '../types';
 import { HAND_SKELETON } from '../hand/HandSkeleton';
