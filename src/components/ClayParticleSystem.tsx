@@ -35,11 +35,8 @@ import {
   getSculptStateRight,
   checkAndApplySplit,
   isClaySplit,
-  forceMerge,
   type ClaySimulation,
-  type SculptState,
 } from '../simulation/ClaySimulation';
-import { xorshift32 } from '../utils/math';
 
 const VOLUME = 2.6;
 
@@ -149,11 +146,10 @@ export function ClayParticleSystem({
   }, [blobRadius, cohesionStrength, surfaceTension, sculptRadius, sculptStrength, sculptMemoryRate, jitterAmplitude, jitterSpeed]);
 
   // Initialize particle buffers
-  const { positions, colors, scales, noiseSeeds } = useMemo(() => {
+  const { positions, colors, scales } = useMemo(() => {
     const positionsArray = new Float32Array(particleCount * 3);
     const colorsArray = new Float32Array(particleCount * 3);
     const scalesArray = new Float32Array(particleCount);
-    const seedsArray = new Uint32Array(particleCount);
 
     for (let i = 0; i < particleCount; i++) {
       const i3 = i * 3;
@@ -186,14 +182,12 @@ export function ClayParticleSystem({
       colorsArray[i3 + 2] = b + m;
 
       scalesArray[i] = 0.8 + Math.random() * 0.4;
-      seedsArray[i] = (Math.random() * 0xffffffff) >>> 0;
     }
 
     return {
       positions: positionsArray,
       colors: colorsArray,
       scales: scalesArray,
-      noiseSeeds: seedsArray,
     };
   }, [particleCount, colorHue]);
 

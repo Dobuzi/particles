@@ -9,7 +9,6 @@ import * as THREE from 'three';
 import type { Vec3, HandInfo, ParticleAssignment } from '../types';
 import { flowVector } from '../utils/flowField';
 import { vec3Lerp, xorshift32 } from '../utils/math';
-import { hslToRgb } from '../utils/color';
 import { HAND_SKELETON } from '../hand/HandSkeleton';
 import { createStableDistribution, createLinkDistribution } from '../hand/ParticleDistribution';
 import {

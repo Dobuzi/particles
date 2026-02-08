@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { Vec3 } from '../../types';
 import { flowVector } from '../flowField';
 
 describe('flowVector', () => {
@@ -92,7 +93,7 @@ describe('flowVector', () => {
 
   it('produces varied output across a grid of points', () => {
     // Sample a small grid and verify not all vectors are the same
-    const vectors = [];
+    const vectors: Vec3[] = [];
     for (let i = 0; i < 5; i++) {
       vectors.push(flowVector(i * 3, 0, 0, 0));
     }
@@ -109,7 +110,7 @@ describe('flowVector', () => {
 
   it('time parameter evolves the field smoothly', () => {
     // Sample the same point at incrementally different times
-    const results = [];
+    const results: Vec3[] = [];
     for (let t = 0; t < 50000; t += 10000) {
       results.push(flowVector(1, 1, 1, t));
     }

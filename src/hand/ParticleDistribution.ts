@@ -13,7 +13,7 @@ import type {
   BoneRegion,
 } from '../types';
 import { HAND_SKELETON } from './HandSkeleton';
-import { HAND_MESH, PALM_TRIANGLES, FINGER_NAMES } from './HandMesh';
+import { PALM_TRIANGLES, FINGER_NAMES } from './HandMesh';
 
 // Configuration for distribution behavior
 export type DistributionConfig = {
@@ -115,7 +115,7 @@ function generateBoneParticles(
 // This gives palm region more volume and fingers stay linear
 function calculateOffset(
   bone: Bone,
-  t: number,
+  _t: number,
   config: DistributionConfig
 ): Vec3 {
   // Finger bones: minimal offset (tight along bone)
@@ -335,7 +335,7 @@ function generateFingerChainParticles(
 
   // Calculate total weight for all fingers
   // Each finger has 3 segments with different weights
-  const fingerWeights = FINGER_NAMES.map((name, fingerIdx) => {
+  const fingerWeights = FINGER_NAMES.map((_name, fingerIdx) => {
     // Thumb has different structure (no intermediate in same sense)
     const isThumb = fingerIdx === 0;
     const segments = isThumb

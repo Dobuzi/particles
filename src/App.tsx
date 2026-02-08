@@ -1,5 +1,5 @@
 import { Canvas } from '@react-three/fiber';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ParticleField } from './components/ParticleField';
 import { useHandDrawing } from './hooks/useHandDrawing';
 
